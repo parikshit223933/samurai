@@ -2,7 +2,7 @@ require_relative 'lib/samurai/version'
 
 Gem::Specification.new do |spec|
   spec.name          = "samurai"
-  spec.version       = SamuraiUtils::VERSION
+  spec.version       = Samurai::VERSION
   spec.authors       = ["Parikshit Singh"]
   spec.email         = ["pk223933@gmail.com"]
 
@@ -30,6 +30,7 @@ Gem::Specification.new do |spec|
   spec.add_dependency "thor", "~> 1.3.1"
   spec.add_dependency "octokit", "~> 8.1.0"
   spec.add_dependency "highline", "~> 2.1.0"
+  spec.add_dependency "faraday-retry", "~> 2.2.1"
 
   spec.add_development_dependency "bundler", "~> 2.1.4"
   spec.add_development_dependency "rake", "~> 13.0.6"
