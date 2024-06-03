@@ -67,9 +67,9 @@ module Samurai
       puts "Configuration saved for #{repo}"
     end
 
-    desc "run", "Prepare for deployment"
+    desc "execute", "Prepare for deployment"
 
-    def run
+    def execute
       current_directory = Dir.pwd
       config = load_config
       current_config = config.dig(current_directory)
