@@ -103,7 +103,7 @@ module Samurai
       `git push -u origin #{release_branch_name} --no-verify`
       puts "Pushed release branch #{release_branch_name}"
 
-      json_response = create_release_pr(github_token, release_branch_name, target_branch_name)
+      json_response = create_release_pr(release_branch_name)
       release_pr_url = json_response['html_url']
       puts "Created Release MR #{release_pr_url}"
       system('open', release_pr_url) # macos only
@@ -256,12 +256,12 @@ module Samurai
       commit.parents.size > 1
     end
 
-    def create_release_pr(github_token, release_branch_name, target_branch_name)
-      headers = { 'Authorization': "token #{github_token}", 'accept': 'application/vnd.github.v3+json' }
+    def create_release_pr(release_branch_name)
+      headers = { 'Authorization': "token #{@github_token}", 'accept': 'application/vnd.github.v3+json' }
       mr_title = release_branch_name.split('-').join(' ').capitalize
       body = {
         head: release_branch_name,
-        base: target_branch_name,
+        base: @target_branch_name,
         title: mr_title
       }
       url = 'https://api.github.com/repos/CodingNinjasHQ/NinjasTool/pulls'
