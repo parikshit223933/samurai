@@ -70,9 +70,9 @@ module Samurai
     desc "execute", "Prepare for deployment"
 
     def execute
-      current_directory = Dir.pwd
+      @current_directory = Dir.pwd
       config = load_config
-      current_config = config.dig(current_directory)
+      current_config = config.dig(@current_directory)
       if current_config.nil?
         puts 'This directory is not configured to use samurai. Please use samurai config to setup'
         exit(1)
@@ -80,7 +80,7 @@ module Samurai
 
       @source_branch_name = current_config.dig('source_branch_name')
       @target_branch_name = current_config.dig('target_branch_name')
-      @github_token = current_config.dig('token')
+      @token = current_config.dig('token')
       @inform_on_slack = current_config.dig('inform_on_slack').downcase == 'yes'
       @slack_channel_name = current_config.dig('slack_channel_name')
       @slack_webhook_url = current_config.dig('slack_webhook_url')
@@ -153,7 +153,7 @@ module Samurai
     end
 
     def fetch_release_pr_details(repo, pr_number)
-      client = client_for(repo)
+      client = client_for(@current_directory)
       pr_number = pr_number.to_i
 
       release_pr_commits = client.pull_request_commits(repo, pr_number)
@@ -233,9 +233,9 @@ module Samurai
       File.write(CONFIG_FILE, JSON.pretty_generate(config))
     end
 
-    def client_for(repo)
+    def client_for(directory)
       config = load_config
-      token = config.dig(repo, 'token')
+      token = config.dig(directory, 'token')
       unless token
         puts "Repository not configured. Run 'samurai config'"
         exit(1)
@@ -257,7 +257,7 @@ module Samurai
     end
 
     def create_release_pr(release_branch_name)
-      headers = { 'Authorization': "token #{@github_token}", 'accept': 'application/vnd.github.v3+json' }
+      headers = { 'Authorization': "token #{@token}", 'accept': 'application/vnd.github.v3+json' }
       mr_title = release_branch_name.split('-').join(' ').capitalize
       body = {
         head: release_branch_name,
