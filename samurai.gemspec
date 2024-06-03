@@ -2,7 +2,7 @@ require_relative 'lib/samurai/version'
 
 Gem::Specification.new do |spec|
   spec.name          = "samurai"
-  spec.version       = Samurai::VERSION
+  spec.version       = SamuraiUtils::VERSION
   spec.authors       = ["Parikshit Singh"]
   spec.email         = ["pk223933@gmail.com"]
 

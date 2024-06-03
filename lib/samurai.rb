@@ -1,3 +1,5 @@
+require '../lib/samurai_utils/version'
+
 require "samurai/version"
 require 'thor'
 require 'octokit'
@@ -6,6 +8,7 @@ require 'fileutils'
 require 'highline'
 
 class Samurai < Thor
+  VERSION = "0.1.0"
   CONFIG_FILE = File.join(Dir.home, '.samurai.config')
 
   desc "config", "Interactive configuration for the GitHub repository and token"
