@@ -4,6 +4,7 @@ require 'octokit'
 require 'json'
 require 'fileutils'
 require 'highline'
+require 'slack-notifier'
 
 module Samurai
   class CLI < Thor
@@ -11,20 +12,147 @@ module Samurai
     CONFIG_FILE = File.join(Dir.home, '.samurai.config')
 
     desc "config", "Interactive configuration for the samurai"
+
+    # CONFIG OPTIONS
+    attr_accessor :source_branch_name,
+                  :token,
+                  :target_branch_name,
+                  :inform_on_slack,
+                  :slack_channel_name,
+                  :slack_user_name,
+                  :slack_webhook_url
+
     def config
       hl = HighLine.new
       config = load_config
 
-      repo = hl.ask("Enter the GitHub repository (e.g., 'owner/repo'): ")
-      token = hl.ask("Enter your GitHub token: ") { |q| q.echo = '*' }
+      repo = hl.ask("Enter the GitHub repository local setup location [#{Dir.pwd}]: ") do |q|
+        q.default = Dir.pwd # Set default to the directory name
+      end
 
-      config[repo] = { token: token }
+      token = hl.ask("Enter your GitHub token: ") { |q| q.echo = '*' }
+      source_branch_name = hl.ask('What is your source branch? [staging]') do |q|
+        q.default = 'staging'
+      end
+
+      target_branch_name = hl.ask('What is your target branch? [master]') do |q|
+        q.default = 'master'
+      end
+
+      inform_on_slack = hl.ask('Inform about releases on slack? [yes]') do |q|
+        q.default = 'yes'
+      end
+
+      slack_channel_name = nil
+      slack_user_name = nil
+      slack_webhook_url = nil
+      if inform_on_slack.downcase == 'yes'
+        slack_channel_name = hl.ask('Enter the slack channel name [sprint]') do |q|
+          q.default = 'sprint'
+        end
+        slack_user_name = hl.ask('Enter the slack user name [Bot]') do |q|
+          q.default = 'Bot'
+        end
+        slack_webhook_url = hl.ask('Enter the slack webhook url')
+      end
+
+      config[repo] = { token: token,
+                       source_branch_name: source_branch_name,
+                       target_branch_name: target_branch_name,
+                       inform_on_slack: inform_on_slack,
+                       slack_channel_name: slack_channel_name,
+                       slack_user_name: slack_user_name,
+                       slack_webhook_url: slack_webhook_url }
       save_config(config)
       puts "Configuration saved for #{repo}"
     end
 
-    desc "deploy REPO PR_NUMBER", "Prepare deployment details for the given release PR"
-    def deploy(repo, pr_number)
+    desc "run", "Prepare for deployment"
+
+    def run
+      current_directory = Dir.pwd
+      config = load_config
+      current_config = config.dig(current_directory)
+      if current_config.nil?
+        puts 'This directory is not configured to use samurai. Please use samurai config to setup'
+        exit(1)
+      end
+
+      @source_branch_name = current_config.dig('source_branch_name')
+      @target_branch_name = current_config.dig('target_branch_name')
+      @github_token = current_config.dig('token')
+      @inform_on_slack = current_config.dig('inform_on_slack').downcase == 'yes'
+      @slack_channel_name = current_config.dig('slack_channel_name')
+      @slack_webhook_url = current_config.dig('slack_webhook_url')
+
+      puts 'Make sure your paths are clean and there is nothing to commit'
+
+      puts 'Stashing existing changes (if any)'
+      `git add . && git stash`
+      puts 'Resetting original repository state'
+      `git reset`
+      puts "Pulling #{@target_branch_name}"
+      `git checkout #{@target_branch_name} && git pull`
+      puts "Pulling #{@source_branch_name}"
+      `git checkout #{@source_branch_name} && git pull`
+
+      current_date = DateTime.now.strftime('%d.%m.%y_%H_%M')
+      release_branch_name = "release-#{current_date}"
+      `git checkout -b "#{release_branch_name}`
+      puts "Created a release branch #{release_branch_name}"
+      `git push -u origin #{release_branch_name} --no-verify`
+      puts "Pushed release branch #{release_branch_name}"
+
+      json_response = create_release_pr(github_token, release_branch_name, target_branch_name)
+      release_pr_url = json_response['html_url']
+      puts "Created Release MR #{release_pr_url}"
+      system('open', release_pr_url) # macos only
+
+      if @inform_on_slack
+        release_pr_id = json_response['number']
+        release_pr_details = fetch_release_pr_details(fetch_repo_name, release_pr_id)
+        send_slack_message(release_pr_details)
+      end
+
+      puts "please approve the PR, Merge it and press enter to proceed"
+      gets.chomp
+      `git checkout #{@target_branch_name} && git pull origin #{@target_branch_name}`
+      `git tag #{current_date} -m "#{release_branch_name}"`
+      `git push origin #{@target_branch_name} --no-verify --follow-tags`
+      puts "PUSHED #{@target_branch_name} AND TAG #{current_date}"
+    end
+
+    private
+
+    def send_slack_message(release_pr_details)
+      notifier = Slack::Notifier.new @slack_webhook_url
+      message = build_slack_message(release_pr_details)
+
+      notifier.ping message, channel: "##{@slack_channel_name}", username: @slack_user_name
+    end
+
+    def build_slack_message(release_pr_details)
+      message = ":newspaper: @channel Hey everyone, details for today's deployment:\n"
+      message += "Apps Deployed: NinjasTool\n"
+      message += "Backend Release details:\n"
+      message += "Release MR :motorway:\n"
+
+      release_pr_details.each do |pr_number, details|
+        message += "\n*PR ##{pr_number}:* #{details[:pr_title]}\n"
+        message += "  *Creator:* #{details[:pr_creator]}\n"
+        message += "  *Created At:* #{details[:pr_created_at]}\n"
+        message += "  *Merged At:* #{details[:pr_merged_at]}\n"
+        message += "  *Merger:* #{details[:merger]}\n"
+        message += "  *Reviewer:* #{details[:reviewer]}\n"
+        message += "  *Major Contributors:* #{details[:major_contributors].join(', ')}\n"
+        message += "  *Minor Contributors:* #{details[:minor_contributors].join(', ')}\n"
+        message += "  *Contributors with Only Merge Commits:* #{details[:contributors_with_only_merge_commit_with_base_branch].join(', ')}\n"
+      end
+
+      message
+    end
+
+    def fetch_release_pr_details(repo, pr_number)
       client = client_for(repo)
       pr_number = pr_number.to_i
 
@@ -66,18 +194,32 @@ module Samurai
           minor_contributors: minor_contributors,
           reviewer: reviewer,
           merger: merger,
-          contributors_with_only_merge_commit_with_base_branch: merge_commit_only_contributors
+          contributors_with_only_merge_commit_with_base_branch: merge_commit_only_contributors,
+          pr_creator: pr.user.login,
+          pr_title: pr.title,
+          pr_created_at: pr.created_at,
+          pr_merged_at: pr.merged_at
         }
       end
 
-      puts JSON.pretty_generate(contributors_hash)
-
-      File.open('contributors.json', 'w') do |file|
-        file.write(JSON.pretty_generate(contributors_hash))
-      end
+      contributors_hash
     end
 
-    private
+    def fetch_repo_name
+      remote_url = `git config --get remote.origin.url`.strip
+      if remote_url.empty?
+        raise 'Remote origin URL not found. Make sure you are in a Git repository with a remote origin.'
+      end
+
+      # Handle different URL formats
+      if remote_url =~ /github.com[:\/](.+\/.+)\.git/
+        repo_name = $1
+      else
+        raise 'Unsupported remote URL format. Expected GitHub repository URL.'
+      end
+
+      repo_name
+    end
 
     def load_config
       if File.exist?(CONFIG_FILE)
@@ -112,6 +254,19 @@ module Samurai
 
     def merge_commit?(commit)
       commit.parents.size > 1
+    end
+
+    def create_release_pr(github_token, release_branch_name, target_branch_name)
+      headers = { 'Authorization': "token #{github_token}", 'accept': 'application/vnd.github.v3+json' }
+      mr_title = release_branch_name.split('-').join(' ').capitalize
+      body = {
+        head: release_branch_name,
+        base: target_branch_name,
+        title: mr_title
+      }
+      url = 'https://api.github.com/repos/CodingNinjasHQ/NinjasTool/pulls'
+      res = RestClient.post(url, body.to_json, headers)
+      JSON.parse(res.body)
     end
   end
 end
