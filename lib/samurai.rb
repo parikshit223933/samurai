@@ -32,7 +32,13 @@ module Samurai
         q.default = Dir.pwd # Set default to the directory name
       end
 
-      token = hl.ask("Enter your GitHub token: ") { |q| q.echo = '*' }
+      default_token = config.dig(Dir.pwd, 'token')
+      num_chars_to_show = 5
+      token = hl.ask("Enter your GitHub token #{!default_token.nil? ? "[#{default_token[0, num_chars_to_show]}#{'*' * (default_token.length - num_chars_to_show)}]" : ''}: ") do |q|
+        q.echo = '*'
+        q.default = default_token
+      end
+
       default_source_branch = config.dig(Dir.pwd, 'source_branch_name') || 'staging'
       source_branch_name = hl.ask("What is your source branch? [#{default_source_branch}]") do |q|
         q.default = default_source_branch
