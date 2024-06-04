@@ -34,7 +34,13 @@ module Samurai
 
       default_token = config.dig(Dir.pwd, 'token')
       num_chars_to_show = 5
-      token = hl.ask("Enter your GitHub token: #{!default_token.nil? ? "[#{default_token[0, num_chars_to_show]}#{'*' * (default_token.length - num_chars_to_show)}]" : ''}") do |q|
+      if default_token
+        displayed_chars = [default_token.length, num_chars_to_show].min
+        masked_token = "#{default_token[0, displayed_chars]}#{'*' * (default_token.length - displayed_chars)}"
+      else
+        masked_token = ''
+      end
+      token = hl.ask("Enter your GitHub token: #{masked_token}") do |q|
         q.echo = '*'
       end
       token = token != '' ? token : default_token
