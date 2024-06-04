@@ -37,7 +37,7 @@ module Samurai
       token = hl.ask("Enter your GitHub token: #{!default_token.nil? ? "[#{default_token[0, num_chars_to_show]}#{'*' * (default_token.length - num_chars_to_show)}]" : ''}") do |q|
         q.echo = '*'
       end
-      token = !token.nil? ? token : default_token
+      token = token != '' ? token : default_token
 
       default_source_branch = config.dig(Dir.pwd, 'source_branch_name') || 'staging'
       source_branch_name = hl.ask("What is your source branch?") do |q|
