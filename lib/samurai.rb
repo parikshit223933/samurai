@@ -109,6 +109,9 @@ module Samurai
       puts "Created Release MR #{release_pr_url}"
       system('open', release_pr_url) # macos only
 
+      puts "please approve the PR, Merge it and press enter to proceed"
+      gets.chomp
+
       if @inform_on_slack
         release_pr_id = json_response['number']
         repo = fetch_repo_name
@@ -116,8 +119,6 @@ module Samurai
         send_slack_message(repo, release_pr_details, release_pr_url)
       end
 
-      puts "please approve the PR, Merge it and press enter to proceed"
-      gets.chomp
       `git checkout #{@target_branch_name} && git pull origin #{@target_branch_name}`
       `git tag #{current_date} -m "#{release_branch_name}"`
       `git push origin #{@target_branch_name} --no-verify --follow-tags`
