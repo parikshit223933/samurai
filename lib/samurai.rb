@@ -5,6 +5,7 @@ require 'json'
 require 'fileutils'
 require 'highline'
 require 'slack-notifier'
+require 'time'
 
 module Samurai
   class CLI < Thor
@@ -110,8 +111,9 @@ module Samurai
 
       if @inform_on_slack
         release_pr_id = json_response['number']
-        release_pr_details = fetch_release_pr_details(fetch_repo_name, release_pr_id)
-        send_slack_message(release_pr_details)
+        repo = fetch_repo_name
+        release_pr_details = fetch_release_pr_details(repo, release_pr_id)
+        send_slack_message(repo, release_pr_details, release_pr_url)
       end
 
       puts "please approve the PR, Merge it and press enter to proceed"
@@ -124,33 +126,46 @@ module Samurai
 
     private
 
-    def send_slack_message(release_pr_details)
+    def send_slack_message(repo, release_pr_details, release_pr_url)
       notifier = Slack::Notifier.new @slack_webhook_url
-      message = build_slack_message(release_pr_details)
+      message = build_slack_message(repo, release_pr_details, release_pr_url)
 
       notifier.ping message, channel: "##{@slack_channel_name}", username: @slack_user_name
     end
 
-    def build_slack_message(release_pr_details)
-      message = ":newspaper: @channel Hey everyone, details for today's deployment:\n"
-      message += "Apps Deployed: NinjasTool\n"
-      message += "Backend Release details:\n"
-      message += "Release MR :motorway:\n"
+    def build_slack_message(repo, release_pr_details, release_pr_url)
+      message = ":newspaper: Hey everyone, details for today's deployment:\n"
+      message += "Apps Deployed: #{repo}\n"
+      message += "Release details:\n"
+      message += "<#{release_pr_url}|Release PR> :motorway:\n"
 
       release_pr_details.each do |pr_number, details|
-        message += "\n*PR ##{pr_number}:* #{details[:pr_title]}\n"
-        message += "  *Creator:* #{details[:pr_creator]}\n"
-        message += "  *Created At:* #{details[:pr_created_at]}\n"
-        message += "  *Merged At:* #{details[:pr_merged_at]}\n"
-        message += "  *Merger:* #{details[:merger]}\n"
-        message += "  *Reviewer:* #{details[:reviewer]}\n"
-        message += "  *Major Contributors:* #{details[:major_contributors].join(', ')}\n"
-        message += "  *Minor Contributors:* #{details[:minor_contributors].join(', ')}\n"
-        message += "  *Contributors with Only Merge Commits:* #{details[:contributors_with_only_merge_commit_with_base_branch].join(', ')}\n"
+        merged_at_ist = convert_to_ist(details[:pr_merged_at])
+        created_at_ist = convert_to_ist(details[:pr_created_at])
+        pr_url = "https://github.com/#{repo}/pull/#{pr_number}"
+
+        message += "\n*<#{pr_url}|PR ##{pr_number}>:* *`#{details[:pr_title]}`* (#{details[:pr_creator]})\n"
+        message += ":clock1: *Created at:* #{created_at_ist}\n"
+        message += ":clock2: *Merged at:* #{merged_at_ist} by #{details[:merger]}\n"
+        message += ":eyes: *Reviewed by:* #{details[:reviewer]}\n"
+        message += ":star: *Major Contributors:* #{details[:major_contributors].join(', ')}\n"
+
+        unless details[:minor_contributors].empty?
+          message += ":small_blue_diamond: *Minor Contributors:* #{details[:minor_contributors].join(', ')}\n"
+        end
+
+        unless details[:contributors_with_only_merge_commit_with_base_branch].empty?
+          message += ":twisted_rightwards_arrows: *Merge commits performed by:* #{details[:contributors_with_only_merge_commit_with_base_branch].join(', ')}\n"
+        end
       end
 
       message
     end
+
+    def convert_to_ist(utc_time)
+      Time.parse(utc_time.to_s).getlocal('+05:30').strftime('%d %B %Y, %I:%M%p')
+    end
+
 
     def fetch_release_pr_details(repo, pr_number)
       client = client_for(@current_directory)
