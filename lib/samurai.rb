@@ -28,29 +28,30 @@ module Samurai
       hl = HighLine.new
       config = load_config
 
-      repo = hl.ask("Enter the GitHub repository local setup location [#{Dir.pwd}]: ") do |q|
+      repo = hl.ask("Enter the GitHub repository local setup location: ") do |q|
         q.default = Dir.pwd # Set default to the directory name
       end
 
       default_token = config.dig(Dir.pwd, 'token')
       num_chars_to_show = 5
-      token = hl.ask("Enter your GitHub token #{!default_token.nil? ? "[#{default_token[0, num_chars_to_show]}#{'*' * (default_token.length - num_chars_to_show)}]" : ''}: ") do |q|
+      token = hl.ask("Enter your GitHub token: ") do |q|
         q.echo = '*'
-        q.default = default_token
+        q.default = "#{!default_token.nil? ? "[#{default_token[0, num_chars_to_show]}#{'*' * (default_token.length - num_chars_to_show)}]" : ''}"
       end
+      token = !token.nil? ? token : default_token
 
       default_source_branch = config.dig(Dir.pwd, 'source_branch_name') || 'staging'
-      source_branch_name = hl.ask("What is your source branch? [#{default_source_branch}]") do |q|
+      source_branch_name = hl.ask("What is your source branch?") do |q|
         q.default = default_source_branch
       end
 
       default_target_branch = config.dig(Dir.pwd, 'target_branch_name') || 'master'
-      target_branch_name = hl.ask("What is your target branch? [#{default_target_branch}]") do |q|
+      target_branch_name = hl.ask("What is your target branch?") do |q|
         q.default = default_target_branch
       end
 
       default_value_for_inform_on_slack = config.dig(Dir.pwd, 'inform_on_slack') || 'yes'
-      inform_on_slack = hl.ask("Inform about releases on slack? [#{default_value_for_inform_on_slack}]") do |q|
+      inform_on_slack = hl.ask("Inform about releases on slack?") do |q|
         q.default = default_value_for_inform_on_slack
       end
 
@@ -60,19 +61,19 @@ module Samurai
       slack_icon_emoji = nil
       if inform_on_slack.downcase == 'yes'
         default_slack_channel_name = config.dig(Dir.pwd, 'slack_channel_name') || 'releases'
-        slack_channel_name = hl.ask("Enter the slack channel name [#{default_slack_channel_name}]") do |q|
+        slack_channel_name = hl.ask("Enter the slack channel name") do |q|
           q.default = default_slack_channel_name
         end
         default_slack_user_name = config.dig(Dir.pwd, 'slack_user_name') || 'Bot'
-        slack_user_name = hl.ask("Enter the slack user name [#{default_slack_user_name}]") do |q|
+        slack_user_name = hl.ask("Enter the slack user name") do |q|
           q.default = default_slack_user_name
         end
         default_slack_webhook_url = config.dig(Dir.pwd, 'slack_webhook_url')
-        slack_webhook_url = hl.ask("Enter the slack webhook url #{!default_slack_webhook_url.nil? ? "[#{default_slack_webhook_url}]" : ''}") do |q|
+        slack_webhook_url = hl.ask("Enter the slack webhook url") do |q|
           q.default = default_slack_webhook_url
         end
         default_slack_icon_emoji = config.dig(Dir.pwd, 'slack_icon_emoji')
-        slack_icon_emoji = hl.ask("What slack icon emoji do youn want to use? #{!default_slack_icon_emoji.nil? ? "[#{default_slack_icon_emoji}]" : ''}") do |q|
+        slack_icon_emoji = hl.ask("What slack icon emoji do you want to use?") do |q|
           q.default = default_slack_icon_emoji
         end
       end
