@@ -6,6 +6,7 @@ require 'fileutils'
 require 'highline'
 require 'slack-notifier'
 require 'time'
+require 'rest-client'
 
 module Samurai
   class CLI < Thor
@@ -127,7 +128,7 @@ module Samurai
 
       current_date = DateTime.now.strftime('%d.%m.%y_%H_%M')
       release_branch_name = "release-#{current_date}"
-      `git checkout -b "#{release_branch_name}`
+      `git checkout -b #{release_branch_name}`
       puts "Created a release branch #{release_branch_name}"
       `git push -u origin #{release_branch_name} --no-verify`
       puts "Pushed release branch #{release_branch_name}"
@@ -311,8 +312,13 @@ module Samurai
         title: mr_title
       }
       url = 'https://api.github.com/repos/CodingNinjasHQ/NinjasTool/pulls'
-      res = RestClient.post(url, body.to_json, headers)
-      JSON.parse(res.body)
+      begin
+        res = RestClient.post(url, body.to_json, headers)
+        JSON.parse(res.body)
+      rescue StandardError => e
+        pp JSON.parse(@e.response.body)['errors']
+        exit(1)
+      end
     end
   end
 end
