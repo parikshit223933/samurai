@@ -112,6 +112,7 @@ module Samurai
       @token = current_config.dig('token')
       @inform_on_slack = current_config.dig('inform_on_slack').downcase == 'yes'
       @slack_channel_name = current_config.dig('slack_channel_name')
+      @slack_user_name = current_config.dig('slack_user_name')
       @slack_webhook_url = current_config.dig('slack_webhook_url')
       @slack_icon_emoji = current_config.dig('slack_icon_emoji')
 
