@@ -21,7 +21,8 @@ module Samurai
                   :inform_on_slack,
                   :slack_channel_name,
                   :slack_user_name,
-                  :slack_webhook_url
+                  :slack_webhook_url,
+                  :slack_icon_emoji
 
     def config
       hl = HighLine.new
@@ -32,29 +33,42 @@ module Samurai
       end
 
       token = hl.ask("Enter your GitHub token: ") { |q| q.echo = '*' }
-      source_branch_name = hl.ask('What is your source branch? [staging]') do |q|
-        q.default = 'staging'
+      default_source_branch = config.dig(Dir.pwd, 'source_branch_name') || 'staging'
+      source_branch_name = hl.ask("What is your source branch? [#{default_source_branch}]") do |q|
+        q.default = default_source_branch
       end
 
-      target_branch_name = hl.ask('What is your target branch? [master]') do |q|
-        q.default = 'master'
+      default_target_branch = config.dig(Dir.pwd, 'target_branch_name') || 'master'
+      target_branch_name = hl.ask("What is your target branch? [#{default_target_branch}]") do |q|
+        q.default = default_target_branch
       end
 
-      inform_on_slack = hl.ask('Inform about releases on slack? [yes]') do |q|
-        q.default = 'yes'
+      default_value_for_inform_on_slack = config.dig(Dir.pwd, 'inform_on_slack') || 'yes'
+      inform_on_slack = hl.ask("Inform about releases on slack? [#{default_value_for_inform_on_slack}]") do |q|
+        q.default = default_value_for_inform_on_slack
       end
 
       slack_channel_name = nil
       slack_user_name = nil
       slack_webhook_url = nil
+      slack_icon_emoji = nil
       if inform_on_slack.downcase == 'yes'
-        slack_channel_name = hl.ask('Enter the slack channel name [sprint]') do |q|
-          q.default = 'sprint'
+        default_slack_channel_name = config.dig(Dir.pwd, 'slack_channel_name') || 'releases'
+        slack_channel_name = hl.ask("Enter the slack channel name [#{default_slack_channel_name}]") do |q|
+          q.default = default_slack_channel_name
         end
-        slack_user_name = hl.ask('Enter the slack user name [Bot]') do |q|
-          q.default = 'Bot'
+        default_slack_user_name = config.dig(Dir.pwd, 'slack_user_name') || 'Bot'
+        slack_user_name = hl.ask("Enter the slack user name [#{default_slack_user_name}]") do |q|
+          q.default = default_slack_user_name
         end
-        slack_webhook_url = hl.ask('Enter the slack webhook url')
+        default_slack_webhook_url = config.dig(Dir.pwd, 'slack_webhook_url')
+        slack_webhook_url = hl.ask("Enter the slack webhook url #{!default_slack_webhook_url.nil? ? "[#{default_slack_webhook_url}]" : ''}") do |q|
+          q.default = default_slack_webhook_url
+        end
+        default_slack_icon_emoji = config.dig(Dir.pwd, 'slack_icon_emoji')
+        slack_icon_emoji = hl.ask("What slack icon emoji do youn want to use? #{!default_slack_icon_emoji.nil? ? "[#{default_slack_icon_emoji}]" : ''}") do |q|
+          q.default = default_slack_icon_emoji
+        end
       end
 
       config[repo] = { token: token,
@@ -63,7 +77,8 @@ module Samurai
                        inform_on_slack: inform_on_slack,
                        slack_channel_name: slack_channel_name,
                        slack_user_name: slack_user_name,
-                       slack_webhook_url: slack_webhook_url }
+                       slack_webhook_url: slack_webhook_url,
+                       slack_icon_emoji: slack_icon_emoji }
       save_config(config)
       puts "Configuration saved for #{repo}"
     end
@@ -85,6 +100,7 @@ module Samurai
       @inform_on_slack = current_config.dig('inform_on_slack').downcase == 'yes'
       @slack_channel_name = current_config.dig('slack_channel_name')
       @slack_webhook_url = current_config.dig('slack_webhook_url')
+      @slack_icon_emoji = current_config.dig('slack_icon_emoji')
 
       puts 'Make sure your paths are clean and there is nothing to commit'
 
@@ -131,7 +147,10 @@ module Samurai
       notifier = Slack::Notifier.new @slack_webhook_url
       message = build_slack_message(repo, release_pr_details, release_pr_url)
 
-      notifier.ping message, channel: "##{@slack_channel_name}", username: @slack_user_name
+      notifier.ping message,
+                    channel: "##{@slack_channel_name}",
+                    username: @slack_user_name,
+                    icon_emoji: ":#{@slack_icon_emoji}:"
     end
 
     def build_slack_message(repo, release_pr_details, release_pr_url)
@@ -166,7 +185,6 @@ module Samurai
     def convert_to_ist(utc_time)
       Time.parse(utc_time.to_s).getlocal('+05:30').strftime('%d %B %Y, %I:%M%p')
     end
-
 
     def fetch_release_pr_details(repo, pr_number)
       client = client_for(@current_directory)
