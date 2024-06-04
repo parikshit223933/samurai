@@ -102,7 +102,7 @@ module Samurai
       config = load_config
       current_config = config.dig(@current_directory)
       if current_config.nil?
-        puts 'This directory is not configured to use samurai. Please use samurai config to setup'
+        puts 'This directory is not configured to use samurai. Please use "samurai config" to setup'
         exit(1)
       end
 
