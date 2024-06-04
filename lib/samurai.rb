@@ -135,7 +135,7 @@ module Samurai
 
       json_response = create_release_pr(release_branch_name)
       release_pr_url = json_response['html_url']
-      puts "Created Release MR #{release_pr_url}"
+      puts "Created Release PR #{release_pr_url}"
       system('open', release_pr_url) # macos only
 
       puts "please approve the PR, Merge it and press enter to proceed"
