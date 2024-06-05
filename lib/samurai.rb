@@ -134,7 +134,7 @@ module Samurai
       `git push -u origin #{release_branch_name} --no-verify`
       puts "Pushed release branch #{release_branch_name}"
 
-      json_response = create_release_pr(release_branch_name)
+      json_response = create_release_pr(fetch_repo_name, release_branch_name)
       release_pr_url = json_response['html_url']
       puts "Created Release PR #{release_pr_url}"
       system('open', release_pr_url) # macos only
@@ -304,7 +304,7 @@ module Samurai
       commit.parents.size > 1
     end
 
-    def create_release_pr(release_branch_name)
+    def create_release_pr(repo, release_branch_name)
       headers = { 'Authorization': "token #{@token}", 'accept': 'application/vnd.github.v3+json' }
       mr_title = release_branch_name.split('-').join(' ').capitalize
       body = {
@@ -312,7 +312,7 @@ module Samurai
         base: @target_branch_name,
         title: mr_title
       }
-      url = 'https://api.github.com/repos/CodingNinjasHQ/NinjasTool/pulls'
+      url = "https://api.github.com/repos/#{repo}/pulls"
       begin
         res = RestClient.post(url, body.to_json, headers)
         JSON.parse(res.body)
