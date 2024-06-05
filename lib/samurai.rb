@@ -204,7 +204,7 @@ module Samurai
       client = client_for(@current_directory)
       pr_number = pr_number.to_i
 
-      release_pr_commits = client.pull_request_commits(repo, pr_number)
+      release_pr_commits = fetch_all_commits(client, repo, pr_number)
       commit_messages = release_pr_commits.map { |commit| commit.commit.message }
       pr_numbers = extract_pr_numbers(commit_messages)
 
@@ -251,6 +251,20 @@ module Samurai
       end
 
       contributors_hash
+    end
+
+    def fetch_all_commits(client, repo, pr_number)
+      commits = []
+      page = 1
+
+      loop do
+        response = client.pull_request_commits(repo, pr_number, per_page: 100, page: page)
+        break if response.empty?
+        commits.concat(response)
+        page += 1
+      end
+
+      commits
     end
 
     def fetch_repo_name
