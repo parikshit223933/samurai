@@ -139,8 +139,8 @@ module Samurai
       puts "Created Release PR #{release_pr_url}"
       system('open', release_pr_url) # macos only
 
-      puts "please approve the PR, Merge it and press enter to proceed"
-      gets.chomp
+      hl = HighLine.new
+      _res = hl.ask("Please approve the PR, Merge it and press enter to proceed")
 
       if @inform_on_slack
         release_pr_id = json_response['number']
