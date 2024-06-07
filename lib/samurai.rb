@@ -141,7 +141,7 @@ module Samurai
 
       hl = HighLine.new
       _res = hl.ask("Please approve the PR, Merge it and press enter to proceed")
-
+      puts 'Fetching release PR details...'
       if @inform_on_slack
         release_pr_id = json_response['number']
         repo = fetch_repo_name
