@@ -1,5 +1,10 @@
 # Samurai
 
+<div align="center">
+  <img src="https://github.com/parikshit223933/samurai/assets/47470038/8eb065f7-09be-4907-a380-b3acaab1e133" width="200px">
+</div>
+
+
 Samurai is a command line tool to simplify and automate deployment initiation process for your projects hosted on github.
 This tool integrates with GitHub, Slack, and utilizes several Ruby gems to streamline the creation of release branches, pull requests, and notifications.
 
