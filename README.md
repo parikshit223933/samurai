@@ -4,11 +4,17 @@ Samurai is a command line tool to simplify and automate deployment initiation pr
 This tool integrates with GitHub, Slack, and utilizes several Ruby gems to streamline the creation of release branches, pull requests, and notifications.
 
 ## Installation
+
+### Building from source
 To install this gem
 1. Clone the Repo
 2. cd into the repo location on your local system
 3. Run: `gem build samurai.gemspec && gem install samurai-0.1.0.gem`
 4. Run `echo 'export PATH="$HOME/.gem/bin:$PATH"' >> ~/.zshrc`
+
+### Using prebuilt gem from releases
+1. Go to releases and download the latest release
+2. Run: `gem install samurai-0.1.0.gem`
 
 > On rubygems.org, there is another gem with the same name, thats why this specific gem cannot be installed with `gem install samurai
 `
