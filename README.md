@@ -1,44 +1,110 @@
 # Samurai
 
-Welcome to your new gem! In this directory, you'll find the files you need to be able to package up your Ruby library into a gem. Put your Ruby code in the file `lib/samurai`. To experiment with that code, run `bin/console` for an interactive prompt.
-
-TODO: Delete this and the text above, and describe your gem
+Samurai is a command line tool to simplify and automate deployment initiation process for your projects hosted on github.
+This tool integrates with GitHub, Slack, and utilizes several Ruby gems to streamline the creation of release branches, pull requests, and notifications.
 
 ## Installation
+To install this gem
+1. Clone the Repo
+2. cd into the repo location on your local system
+3. Run: `gem build samurai.gemspec && gem install samurai-0.1.0.gem`
+4. Run `echo 'export PATH="$HOME/.gem/bin:$PATH"' >> ~/.zshrc`
 
-Add this line to your application's Gemfile:
+> On rubygems.org, there is another gem with the same name, thats why this specific gem cannot be installed with `gem install samurai
+`
 
-```ruby
-gem 'samurai'
+## Configuration
+Before using Samurai, you need to configure it for your repository. This configuration includes setting up your GitHub token, source and target branches, and Slack notifications if needed.
+Run the following command at the location of your github repo setup on your local system to start the interactive configuration process
+```sh
+samurai config
 ```
 
-And then execute:
+This command will prompt you to enter the necessary configuration details, including:
 
-    $ bundle install
+- GitHub repository location
+- GitHub token
+- Source branch name (default: staging)
+- Target branch name (default: master)
+- Slack notification preferences
 
-Or install it yourself as:
+If you choose to inform about releases on Slack, you will also be prompted to enter
+- Slack channel name
+- Slack user name
+- Slack webhook URL
+- Slack icon emoji
 
-    $ gem install samurai
+The configuration is saved in `~/.samurai.config`.
 
 ## Usage
+Once configured, you can use Samurai to prepare for deployment by executing the following command:
+```shell
+samurai execute
+```
 
-TODO: Write usage instructions here
+This command will:
+
+- Stash any existing changes.
+- Reset the repository to its original state.
+- Pull the latest changes from the target branch.
+- Pull the latest changes from the source branch.
+- Create a new release branch.
+- Push the release branch to the remote repository.
+- Create a pull request for the release branch.
+- Notify the configured Slack channel about the release (if enabled).
+
+## Example
+```shell
+$ samurai config
+Enter the GitHub repository local setup location: /path/to/repo
+Enter your GitHub token: **********
+What is your source branch? (staging)
+What is your target branch? (master)
+Inform about releases on slack? (yes)
+Enter the slack channel name (releases)
+Enter the slack user name (Bot)
+Enter the slack webhook url: https://hooks.slack.com/services/your/webhook/url
+What slack icon emoji do you want to use? (:rocket:)
+
+Configuration saved for /path/to/repo
+```
+
+```shell
+$ samurai execute
+Make sure your paths are clean and there is nothing to commit
+Stashing existing changes (if any)
+Resetting original repository state
+Pulling master
+Pulling staging
+Created a release branch release-14.06.24_12_30
+Pushed release branch release-14.06.24_12_30
+Created Release PR https://github.com/your/repo/pull/123
+Fetching release PR details...
+PUSHED master AND TAG 14.06.24_12_30
+```
 
 ## Development
+To contribute to Samurai, follow these steps:
 
-After checking out the repo, run `bin/setup` to install dependencies. You can also run `bin/console` for an interactive prompt that will allow you to experiment.
+- Fork the repository.
+- Create a feature branch (git checkout -b feature-branch).
+- Commit your changes (git commit -am 'Add new feature').
+- Push to the branch (git push origin feature-branch).
+- Create a new Pull Request.
 
-To install this gem onto your local machine, run `bundle exec rake install`. To release a new version, update the version number in `version.rb`, and then run `bundle exec rake release`, which will create a git tag for the version, push git commits and tags, and push the `.gem` file to [rubygems.org](https://rubygems.org).
-
-## Contributing
-
-Bug reports and pull requests are welcome on GitHub at https://github.com/[USERNAME]/samurai. This project is intended to be a safe, welcoming space for collaboration, and contributors are expected to adhere to the [code of conduct](https://github.com/[USERNAME]/samurai/blob/master/CODE_OF_CONDUCT.md).
-
+> Tip You can use a single comand to test your changes: `rm -rf
+samurai-0.1.0.gem && gem uninstall samurai && gem build samurai.gemspec && gem install samurai-0.1.0.gem
+`
 
 ## License
+Samurai is available under the MIT License.
 
-The gem is available as open source under the terms of the [MIT License](https://opensource.org/licenses/MIT).
+## Acknowledgements
+Samurai uses the following Ruby gems:
 
-## Code of Conduct
+- Thor for command-line interface
+- Octokit for GitHub API integration
+- HighLine for interactive command-line input
+- Slack Notifier for Slack notifications
+- RestClient for making HTTP requests
 
-Everyone interacting in the Samurai project's codebases, issue trackers, chat rooms and mailing lists is expected to follow the [code of conduct](https://github.com/[USERNAME]/samurai/blob/master/CODE_OF_CONDUCT.md).
