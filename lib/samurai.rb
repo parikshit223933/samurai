@@ -442,59 +442,80 @@ module Samurai
 
     def build_email_body(repo, release_pr_details, release_pr_url)
       body = <<~HTML
-        <html>
-          <head>
-            <style>
-              body {
-                font-family: Arial, sans-serif;
-                line-height: 1.6;
-              }
-              h1 {
-                color: #333;
-              }
-              h2 {
-                color: #555;
-                border-bottom: 1px solid #ccc;
-                padding-bottom: 5px;
-              }
-              h3 {
-                color: #777;
-              }
-              p {
-                margin: 0 0 10px;
-              }
-              a {
-                color: #007BFF;
-                text-decoration: none;
-              }
-              .pr-description {
-                margin-left: 20px;
-              }
-            </style>
-          </head>
-          <body>
-            <h1>Deployment Details for #{repo}</h1>
-            <h3>Release PR: <a href='#{release_pr_url}'>#{release_pr_url}</a></h3>
+    <html>
+      <head>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+          }
+          h1 {
+            color: #333;
+          }
+          h2 {
+            color: #555;
+            border-bottom: 1px solid #ccc;
+            padding-bottom: 5px;
+          }
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+          }
+          th, td {
+            border: 1px solid #ccc;
+            padding: 10px;
+            text-align: left;
+          }
+          th {
+            background-color: #f4f4f4;
+          }
+          a {
+            color: #007BFF;
+            text-decoration: none;
+          }
+        </style>
+      </head>
+      <body>
+        <h1>Deployment Details for #{repo}</h1>
+        <p>Release PR: <a href='#{release_pr_url}'>#{release_pr_url}</a></p>
+        <table>
+          <tr>
+            <th>Label</th>
+            <th>PR Title</th>
+            <th>Description</th>
+          </tr>
       HTML
 
       categorized_prs = release_pr_details.values.group_by { |pr| pr[:pr_labels].first }
 
       categorized_prs.each do |label, prs|
-        body += "<h2>#{label}</h2>"
-        prs.each do |pr|
+        body += <<~HTML
+      <tr>
+        <td rowspan="#{prs.size}"><strong>#{label}</strong></td>
+        <td><a href="https://github.com/#{repo}/pull/#{prs.first[:pr_number]}">#{prs.first[:pr_title]}</a></td>
+        <td>#{prs.first[:pr_body]}</td>
+      </tr>
+        HTML
+
+        prs[1..].each do |pr|
           body += <<~HTML
-            <h3><a href="https://github.com/#{repo}/pull/#{pr[:pr_number]}">#{pr[:pr_title]}</a></h3>
-            <p class="pr-description">#{pr[:pr_body]}</p>
+        <tr>
+          <td><a href="https://github.com/#{repo}/pull/#{pr[:pr_number]}">#{pr[:pr_title]}</a></td>
+          <td>#{pr[:pr_body]}</td>
+        </tr>
           HTML
         end
       end
 
       body += <<~HTML
-          </body>
-        </html>
+        </table>
+      </body>
+    </html>
       HTML
 
       body
     end
+
   end
 end
