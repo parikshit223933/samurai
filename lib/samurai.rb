@@ -7,6 +7,7 @@ require 'highline'
 require 'slack-notifier'
 require 'time'
 require 'rest-client'
+require 'mail'
 
 module Samurai
   class CLI < Thor
@@ -23,7 +24,12 @@ module Samurai
                   :slack_channel_name,
                   :slack_user_name,
                   :slack_webhook_url,
-                  :slack_icon_emoji
+                  :slack_icon_emoji,
+                  :send_email,
+                  :smtp_settings,
+                  :email_receiver,
+                  :cc_emails,
+                  :sender_email
 
     def config
       hl = HighLine.new
@@ -84,14 +90,77 @@ module Samurai
         end
       end
 
-      config[repo] = { token: token,
-                       source_branch_name: source_branch_name,
-                       target_branch_name: target_branch_name,
-                       inform_on_slack: inform_on_slack,
-                       slack_channel_name: slack_channel_name,
-                       slack_user_name: slack_user_name,
-                       slack_webhook_url: slack_webhook_url,
-                       slack_icon_emoji: slack_icon_emoji }
+      default_value_for_send_email = config.dig(Dir.pwd, 'send_email') || 'yes'
+      send_email = hl.ask("Send email notifications?") do |q|
+        q.default = default_value_for_send_email
+      end
+
+      smtp_settings = {}
+      email_receiver = nil
+      sender_email = nil
+      cc_emails = nil
+      if send_email.downcase == 'yes'
+        smtp_settings[:address] = hl.ask("SMTP address: ") do |q|
+          q.default = config.dig(Dir.pwd, 'smtp_settings', 'address') || 'smtp.example.com'
+        end
+        smtp_settings[:port] = hl.ask("SMTP port: ") do |q|
+          q.default = config.dig(Dir.pwd, 'smtp_settings', 'port') || 587
+        end
+        smtp_settings[:domain] = hl.ask("SMTP domain: ") do |q|
+          q.default = config.dig(Dir.pwd, 'smtp_settings', 'domain') || 'example.com'
+        end
+        smtp_settings[:user_name] = hl.ask("SMTP username: ") do |q|
+          q.default = config.dig(Dir.pwd, 'smtp_settings', 'user_name') || 'user@example.com'
+        end
+        default_smtp_password = config.dig(Dir.pwd, 'smtp_settings', 'password')
+        if default_smtp_password
+          displayed_chars = [default_smtp_password.length, num_chars_to_show].min
+          masked_password = "#{default_smtp_password[0, displayed_chars]}#{'*' * (default_smtp_password.length - displayed_chars)}"
+        else
+          masked_password = ''
+        end
+        smtp_settings[:password] = hl.ask("SMTP password: #{masked_password}") do |q|
+          q.echo = '*'
+        end
+        smtp_settings[:password] = smtp_settings[:password] != '' ? smtp_settings[:password] : default_smtp_password
+
+        smtp_settings[:authentication] = hl.ask("SMTP authentication method (plain, login, cram_md5): ") do |q|
+          q.default = config.dig(Dir.pwd, 'smtp_settings', 'authentication') || 'plain'
+        end
+        smtp_settings[:enable_starttls_auto] = ['yes', 'true'].include?(
+          hl.ask("Enable STARTTLS (yes/no): ") do |q|
+            q.default = config.dig(Dir.pwd, 'smtp_settings', 'enable_starttls_auto') || 'yes'
+          end.to_s.downcase
+        )
+
+        email_receiver = hl.ask("Receiver email: ") do |q|
+          q.default = config.dig(Dir.pwd, 'email_receiver') || 'receiver@example.com'
+        end
+
+        sender_email = hl.ask("Sender email: ") do |q|
+          q.default = config.dig(Dir.pwd, 'sender_email') || 'sender@example.com'
+        end
+
+        cc_emails = hl.ask("Comma separated CC emails: ") do |q|
+          q.default = config.dig(Dir.pwd, 'cc_emails') || ''
+        end
+      end
+
+      config[repo] = {
+        token: token,
+        source_branch_name: source_branch_name,
+        target_branch_name: target_branch_name,
+        inform_on_slack: inform_on_slack,
+        slack_channel_name: slack_channel_name,
+        slack_user_name: slack_user_name,
+        slack_webhook_url: slack_webhook_url,
+        slack_icon_emoji: slack_icon_emoji,
+        send_email: send_email,
+        smtp_settings: smtp_settings,
+        email_receiver: email_receiver,
+        sender_email: sender_email,
+        cc_emails: cc_emails
+      }
       save_config(config)
       puts "Configuration saved for #{repo}"
     end
@@ -115,6 +184,11 @@ module Samurai
       @slack_user_name = current_config.dig('slack_user_name')
       @slack_webhook_url = current_config.dig('slack_webhook_url')
       @slack_icon_emoji = current_config.dig('slack_icon_emoji')
+      @send_email = current_config.dig('send_email').downcase == 'yes'
+      @smtp_settings = current_config.dig('smtp_settings')
+      @email_receiver = current_config.dig('email_receiver')
+      @cc_emails = current_config.dig('cc_emails')
+      @sender_email = current_config.dig('sender_email')
 
       puts 'Make sure your paths are clean and there is nothing to commit'
 
@@ -153,6 +227,14 @@ module Samurai
       `git tag #{current_date} -m "#{release_branch_name}"`
       `git push origin #{@target_branch_name} --no-verify --follow-tags`
       puts "PUSHED #{@target_branch_name} AND TAG #{current_date}"
+
+      if @send_email
+        puts 'Sending email to configured users'
+        release_pr_id = json_response['number']
+        repo = fetch_repo_name
+        release_pr_details = fetch_release_pr_details(repo, release_pr_id)
+        send_email_notification(repo, release_pr_details, release_pr_url)
+      end
     end
 
     private
@@ -237,16 +319,22 @@ module Samurai
         merger = pr.merged_by&.login
         reviewer = pr_reviews.map { |review| review.user.login }.uniq.first
 
+        # Extract the PR description part under "## Description" and before "### ClickUp Task Link"
+        pr_description = pr.body.match(/## Description\s*\n(.*?)\n\s*### ClickUp Task Link/m)&.captures&.first&.strip
+
         contributors_hash[sub_pr_number] = {
+          pr_number: sub_pr_number,
           major_contributors: major_contributors,
           minor_contributors: minor_contributors,
           reviewer: reviewer,
           merger: merger,
-          contributors_with_only_merge_commit_with_base_branch: merge_commit_only_contributors,
+          pr_labels: pr.labels.map(&:name),
           pr_creator: pr.user.login,
           pr_title: pr.title,
+          pr_body: pr_description || pr.body,
           pr_created_at: pr.created_at,
-          pr_merged_at: pr.merged_at
+          pr_merged_at: pr.merged_at,
+          contributors_with_only_merge_commit_with_base_branch: merge_commit_only_contributors
         }
       end
 
@@ -335,6 +423,117 @@ module Samurai
         exit(1)
       end
     end
+
+    def send_email_notification(repo, release_pr_details, release_pr_url)
+      email_body = build_email_body(repo, release_pr_details, release_pr_url)
+      config = {
+        address: @smtp_settings['address'],
+        port: @smtp_settings['port'],
+        domain: @smtp_settings['domain'],
+        user_name: @smtp_settings['user_name'],
+        password: @smtp_settings['password'],
+        authentication: @smtp_settings['authentication'],
+        enable_starttls_auto: @smtp_settings['enable_starttls_auto']
+      }
+      Mail.defaults do
+        delivery_method :smtp, config
+      end
+
+      sender_email = @sender_email
+      email_receiver = @email_receiver
+      cc_emails = @cc_emails ? @cc_emails.split(',').map(&:strip) : []
+      subject_line = "Deployment Details for #{repo}"
+
+      mail = Mail.new do
+        from sender_email
+        to email_receiver
+        cc cc_emails
+        subject subject_line
+        html_part do
+          content_type 'text/html; charset=UTF-8'
+          body email_body
+        end
+      end
+
+      mail.deliver!
+    end
+
+    def build_email_body(repo, release_pr_details, release_pr_url)
+      body = <<~HTML
+        <html>
+          <head>
+            <style>
+              body {
+                font-family: Arial, sans-serif;
+                line-height: 1.6;
+              }
+              h1 {
+                color: #333;
+              }
+              h2 {
+                color: #555;
+                border-bottom: 1px solid #ccc;
+                padding-bottom: 5px;
+              }
+              table {
+                width: 100%;
+                border-collapse: collapse;
+                margin-bottom: 20px;
+              }
+              th, td {
+                border: 1px solid #ccc;
+                padding: 10px;
+                text-align: left;
+              }
+              th {
+                background-color: #f4f4f4;
+              }
+              a {
+                color: #007BFF;
+                text-decoration: none;
+              }
+            </style>
+          </head>
+          <body>
+            <h1>Deployment Details for #{repo}</h1>
+            <p>Release PR: <a href='#{release_pr_url}'>#{release_pr_url}</a></p>
+            <table>
+              <tr>
+                <th>Label</th>
+                <th>PR Title</th>
+                <th>Description</th>
+              </tr>
+      HTML
+
+      categorized_prs = release_pr_details.values.group_by { |pr| pr[:pr_labels].first }
+
+      categorized_prs.each do |label, prs|
+        body += <<~HTML
+          <tr>
+            <td rowspan="#{prs.size}"><strong>#{label}</strong></td>
+            <td><a href="https://github.com/#{repo}/pull/#{prs.first[:pr_number]}">#{prs.first[:pr_title]}</a></td>
+            <td>#{prs.first[:pr_body]}</td>
+          </tr>
+        HTML
+
+        prs[1..].each do |pr|
+          body += <<~HTML
+            <tr>
+              <td><a href="https://github.com/#{repo}/pull/#{pr[:pr_number]}">#{pr[:pr_title]}</a></td>
+              <td>#{pr[:pr_body]}</td>
+            </tr>
+          HTML
+        end
+      end
+
+      body += <<~HTML
+            </table>
+          </body>
+        </html>
+      HTML
+
+      body
+    end
+
   end
 end
-
