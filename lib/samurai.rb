@@ -27,7 +27,8 @@ module Samurai
                   :slack_icon_emoji,
                   :send_email,
                   :smtp_settings,
-                  :notification_email,
+                  :email_receiver,
+                  :cc_emails,
                   :sender_email
 
     def config
@@ -95,8 +96,9 @@ module Samurai
       end
 
       smtp_settings = {}
-      notification_email = nil
+      email_receiver = nil
       sender_email = nil
+      cc_emails = nil
       if send_email.downcase == 'yes'
         smtp_settings[:address] = hl.ask("SMTP address: ") do |q|
           q.default = config.dig(Dir.pwd, 'smtp_settings', 'address') || 'smtp.example.com'
@@ -110,12 +112,20 @@ module Samurai
         smtp_settings[:user_name] = hl.ask("SMTP username: ") do |q|
           q.default = config.dig(Dir.pwd, 'smtp_settings', 'user_name') || 'user@example.com'
         end
-        smtp_settings[:password] = hl.ask("SMTP password: ") do |q|
-          q.echo = '*'
-          q.default = config.dig(Dir.pwd, 'smtp_settings', 'password') || 'password'
+        default_smtp_password = config.dig(Dir.pwd, 'smtp_settings', 'password')
+        if default_smtp_password
+          displayed_chars = [default_smtp_password.length, num_chars_to_show].min
+          masked_password = "#{default_smtp_password[0, displayed_chars]}#{'*' * (default_smtp_password.length - displayed_chars)}"
+        else
+          masked_password = ''
         end
+        smtp_settings[:password] = hl.ask("SMTP password: #{masked_password}") do |q|
+          q.echo = '*'
+        end
+        smtp_settings[:password] = smtp_settings[:password] != '' ? smtp_settings[:password] : default_smtp_password
+
         smtp_settings[:authentication] = hl.ask("SMTP authentication method (plain, login, cram_md5): ") do |q|
-          q.default = config.dig(Dir.pwd, 'smtp_settings', 'authentication') || 'login'
+          q.default = config.dig(Dir.pwd, 'smtp_settings', 'authentication') || 'plain'
         end
         smtp_settings[:enable_starttls_auto] = ['yes', 'true'].include?(
           hl.ask("Enable STARTTLS (yes/no): ") do |q|
@@ -123,12 +133,16 @@ module Samurai
           end.to_s.downcase
         )
 
-        notification_email = hl.ask("Notification email: ") do |q|
-          q.default = config.dig(Dir.pwd, 'notification_email') || 'notify@example.com'
+        email_receiver = hl.ask("Receiver email: ") do |q|
+          q.default = config.dig(Dir.pwd, 'email_receiver') || 'receiver@example.com'
         end
 
         sender_email = hl.ask("Sender email: ") do |q|
           q.default = config.dig(Dir.pwd, 'sender_email') || 'sender@example.com'
+        end
+
+        cc_emails = hl.ask("Comma separated CC emails: ") do |q|
+          q.default = config.dig(Dir.pwd, 'cc_emails') || ''
         end
       end
 
@@ -143,8 +157,9 @@ module Samurai
         slack_icon_emoji: slack_icon_emoji,
         send_email: send_email,
         smtp_settings: smtp_settings,
-        notification_email: notification_email,
-        sender_email: sender_email
+        email_receiver: email_receiver,
+        sender_email: sender_email,
+        cc_emails: cc_emails
       }
       save_config(config)
       puts "Configuration saved for #{repo}"
@@ -171,7 +186,8 @@ module Samurai
       @slack_icon_emoji = current_config.dig('slack_icon_emoji')
       @send_email = current_config.dig('send_email').downcase == 'yes'
       @smtp_settings = current_config.dig('smtp_settings')
-      @notification_email = current_config.dig('notification_email')
+      @email_receiver = current_config.dig('email_receiver')
+      @cc_emails = current_config.dig('cc_emails')
       @sender_email = current_config.dig('sender_email')
 
       puts 'Make sure your paths are clean and there is nothing to commit'
@@ -424,12 +440,14 @@ module Samurai
       end
 
       sender_email = @sender_email
-      notification_email = @notification_email
+      email_receiver = @email_receiver
+      cc_emails = @cc_emails ? @cc_emails.split(',').map(&:strip) : []
       subject_line = "Deployment Details for #{repo}"
 
       mail = Mail.new do
         from sender_email
-        to notification_email
+        to email_receiver
+        cc cc_emails
         subject subject_line
         html_part do
           content_type 'text/html; charset=UTF-8'
