@@ -503,18 +503,29 @@ module Samurai
             <p>Release PR: <a href='#{release_pr_url}'>#{release_pr_url}</a></p>
             <table>
               <tr>
-                <th>Label</th>
+                <th>Category</th>
                 <th>PR Title</th>
                 <th>Description</th>
               </tr>
       HTML
 
-      categorized_prs = release_pr_details.values.group_by { |pr| pr[:pr_labels].first }
+      categorized_prs = {
+        "Tech Debt" => [],
+        "Bugfix" => [],
+        "Feature" => []
+      }
 
-      categorized_prs.each do |label, prs|
+      release_pr_details.each_value do |pr|
+        category = pr[:pr_labels].find { |label| ["Tech Debt", "Bugfix", "Feature"].include?(label) } || "Feature"
+        categorized_prs[category] << pr
+      end
+
+      categorized_prs.each do |category, prs|
+        next if prs.empty?
+
         body += <<~HTML
           <tr>
-            <td rowspan="#{prs.size}"><strong>#{label}</strong></td>
+            <td rowspan="#{prs.size}"><strong>#{category}</strong></td>
             <td><a href="https://github.com/#{repo}/pull/#{prs.first[:pr_number]}">#{prs.first[:pr_title]}</a></td>
             <td>#{prs.first[:pr_body]}</td>
           </tr>
