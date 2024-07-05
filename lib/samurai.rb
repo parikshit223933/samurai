@@ -320,7 +320,11 @@ module Samurai
         reviewer = pr_reviews.map { |review| review.user.login }.uniq.first
 
         # Extract the PR description part under "## Description" and before "### ClickUp Task Link"
-        pr_description = pr.body.match(/## Description\s*\n(.*?)\n\s*### ClickUp Task Link/m)&.captures&.first&.strip
+        pr_description = if @send_email
+                           pr.body.match(/## Description\s*\n(.*?)\n\s*### ClickUp Task Link/m)&.captures&.first&.strip
+                         else
+                           nil
+                         end
 
         contributors_hash[sub_pr_number] = {
           pr_number: sub_pr_number,
