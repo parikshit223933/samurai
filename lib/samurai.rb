@@ -294,6 +294,8 @@ module Samurai
 
       pr_numbers.each do |sub_pr_number|
         pr = client.pull_request(repo, sub_pr_number)
+        next unless pr.base.ref == 'staging'
+
         pr_commits = client.pull_request_commits(repo, sub_pr_number)
         pr_reviews = client.pull_request_reviews(repo, sub_pr_number)
 
@@ -321,7 +323,7 @@ module Samurai
 
         # Extract the PR description part under "## Description" and before "### ClickUp Task Link"
         pr_description = if @send_email
-                           pr.body.match(/## Description\s*\n(.*?)\n\s*### ClickUp Task Link/m)&.captures&.first&.strip
+                           pr.body&.match(/## Description\s*\n(.*?)\n\s*### ClickUp Task Link/m)&.captures&.first&.strip
                          else
                            nil
                          end
@@ -335,7 +337,7 @@ module Samurai
           pr_labels: pr.labels.map(&:name),
           pr_creator: pr.user.login,
           pr_title: pr.title,
-          pr_body: pr_description || pr.body,
+          pr_body: pr_description || pr.body || '********* NO DESCRIPTION PROVIDED. PLEASE CHECK THIS PR *********',
           pr_created_at: pr.created_at,
           pr_merged_at: pr.merged_at,
           contributors_with_only_merge_commit_with_base_branch: merge_commit_only_contributors
