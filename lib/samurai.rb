@@ -448,7 +448,8 @@ module Samurai
       sender_email = @sender_email
       email_receiver = @email_receiver
       cc_emails = @cc_emails ? @cc_emails.split(',').map(&:strip) : []
-      subject_line = "Deployment Details for #{repo}"
+      ist_time = Time.now.getlocal('+05:30').strftime('%d %B %Y, %I:%M%p IST')
+      subject_line = "Deployment Details for #{repo} - #{ist_time} IST"
 
       mail = Mail.new do
         from sender_email
