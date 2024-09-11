@@ -504,6 +504,7 @@ module Samurai
           <body>
             <h1>Deployment Details for #{repo}</h1>
             <p>Release PR: <a href='#{release_pr_url}'>#{release_pr_url}</a></p>
+            <p>These releases are considered auto-approved and in line with product requirements. Please reply to this mail thread to raise a dispute</p>
             <table>
               <tr>
                 <th>Category</th>
