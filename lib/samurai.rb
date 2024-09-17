@@ -267,6 +267,8 @@ module Samurai
       `git checkout #{@target_branch_name} && git pull`
       `git checkout #{@hotfix} && git pull && git pull origin #{@target_branch_name} --no-edit && git push`
       `git checkout #{@staging} && git pull && git pull origin #{@target_branch_name} --no-edit && git push`
+      puts "deleting release branch #{release_branch_name}"
+      `git branch -d #{release_branch_name}`
     end
 
     private
