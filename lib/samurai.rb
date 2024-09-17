@@ -275,8 +275,8 @@ module Samurai
     def build_slack_message(repo, release_pr_details, release_pr_url)
       message = ":newspaper: Hey everyone, details for today's deployment:\n"
       message += "Apps Deployed: #{repo}\n"
-      message += "Release details:\n"
-      message += "<#{release_pr_url}|Release PR> :motorway:\n"
+      message += "#{@deployment_type} details:\n"
+      message += "<#{release_pr_url}|#{@deployment_type} PR> :motorway:\n"
 
       release_pr_details.each do |pr_number, details|
         merged_at_ist = convert_to_ist(details[:pr_merged_at])
