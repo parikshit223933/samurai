@@ -525,9 +525,9 @@ module Samurai
             </style>
           </head>
           <body>
-            <h1>Deployment Details for #{repo}</h1>
-            <p>#{@deployment_type == @weekly_release ? 'Release' : 'Hotfix'} PR: <a href='#{release_pr_url}'>#{release_pr_url}</a></p>
-            #{@deployment_type == @weekly_release ? '<p>These releases are considered auto-approved and in line with product requirements/tech optimisations and customer support. Please reply to this mail in case of any question or clarification is required.</p>' : '<p>These releases are going directly to master and sub-prs were approved via separate emails and are considered in line with product requirements/tech optimisations and customer support. Please reply to this mail in case of any question or clarification is required.</p>'}
+            <h1>[#{@deployment_type.upcase}] Deployment Details for #{repo}</h1>
+            <p>#{@deployment_type.downcase == @weekly_release.downcase ? 'Release' : 'Hotfix'} PR: <a href='#{release_pr_url}'>#{release_pr_url}</a></p>
+            #{@deployment_type.downcase == @weekly_release.downcase ? '<p>These releases are considered auto-approved and in line with product requirements/tech optimisations and customer support. Please reply to this mail in case of any question or clarification is required.</p>' : '<p>These releases are going directly to master and sub-prs were approved via separate emails and are considered in line with product requirements/tech optimisations and customer support. Please reply to this mail in case of any question or clarification is required.</p>'}
             <table>
               <tr>
                 <th>Category</th>
