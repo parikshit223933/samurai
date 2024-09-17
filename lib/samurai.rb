@@ -176,8 +176,28 @@ module Samurai
         exit(1)
       end
 
-      @source_branch_name = current_config.dig('source_branch_name')
-      @target_branch_name = current_config.dig('target_branch_name')
+      hl = HighLine.new
+      # Prompt for source branch
+      default_source_branch = current_config.dig('source_branch_name')
+      @source_branch_name = hl.ask("Enter the source branch name: ") do |q|
+        q.default = default_source_branch
+      end
+      # Prompt for target branch
+      default_target_branch = current_config.dig('target_branch_name')
+      @target_branch_name = hl.ask("Enter the target branch name [default is #{default_target_branch}]: ") do |q|
+        q.default = default_target_branch
+      end
+      # Prompt for deployment type
+      @weekly_release = 'weekly-release'
+      @hotfix = 'hotfix'
+      @deployment_type = hl.ask("Enter the deployment type [#{@hotfix}/#{@weekly_release}(default)]: ") do |q|
+        q.default = @weekly_release
+        q.validate = /^(hotfix|weekly-release)$/i
+        q.responses[:not_valid] = "Please enter 'hotfix' or 'weekly-release'"
+      end
+      # Convert deployment type to lowercase for consistency
+      @deployment_type.downcase!
+
       @token = current_config.dig('token')
       @inform_on_slack = current_config.dig('inform_on_slack').downcase == 'yes'
       @slack_channel_name = current_config.dig('slack_channel_name')
@@ -216,11 +236,14 @@ module Samurai
       hl = HighLine.new
       _res = hl.ask("Please approve the PR, Merge it and press enter to proceed")
       puts 'Fetching release PR details...'
+
+      @release_pr_details = nil
+
       if @inform_on_slack
         release_pr_id = json_response['number']
         repo = fetch_repo_name
-        release_pr_details = fetch_release_pr_details(repo, release_pr_id)
-        send_slack_message(repo, release_pr_details, release_pr_url)
+        @release_pr_details = fetch_release_pr_details(repo, release_pr_id)
+        send_slack_message(repo, @release_pr_details, release_pr_url)
       end
 
       `git checkout #{@target_branch_name} && git pull origin #{@target_branch_name}`
@@ -232,8 +255,8 @@ module Samurai
         puts 'Sending email to configured users'
         release_pr_id = json_response['number']
         repo = fetch_repo_name
-        release_pr_details = fetch_release_pr_details(repo, release_pr_id)
-        send_email_notification(repo, release_pr_details, release_pr_url)
+        @release_pr_details ||= fetch_release_pr_details(repo, release_pr_id)
+        send_email_notification(repo, @release_pr_details, release_pr_url)
       end
     end
 
@@ -294,7 +317,7 @@ module Samurai
 
       pr_numbers.each do |sub_pr_number|
         pr = client.pull_request(repo, sub_pr_number)
-        next unless pr.base.ref == 'staging'
+        next unless pr.base.ref == @source_branch_name
 
         pr_commits = client.pull_request_commits(repo, sub_pr_number)
         pr_reviews = client.pull_request_reviews(repo, sub_pr_number)
@@ -503,8 +526,8 @@ module Samurai
           </head>
           <body>
             <h1>Deployment Details for #{repo}</h1>
-            <p>Release PR: <a href='#{release_pr_url}'>#{release_pr_url}</a></p>
-            <p>These releases are considered auto-approved and in line with product requirements/tech optimisations and customer support. Please reply to this mail in case of any question or clarification is required.</p>
+            <p>#{@deployment_type == @weekly_release ? 'Release' : 'Hotfix'} PR: <a href='#{release_pr_url}'>#{release_pr_url}</a></p>
+            #{@deployment_type == @weekly_release ? '<p>These releases are considered auto-approved and in line with product requirements/tech optimisations and customer support. Please reply to this mail in case of any question or clarification is required.</p>' : '<p>These releases are going directly to master and sub-prs were approved via separate emails and are considered in line with product requirements/tech optimisations and customer support. Please reply to this mail in case of any question or clarification is required.</p>'}
             <table>
               <tr>
                 <th>Category</th>
