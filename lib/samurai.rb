@@ -190,6 +190,7 @@ module Samurai
       # Prompt for deployment type
       @weekly_release = 'weekly-release'
       @hotfix = 'hotfix'
+      @staging = 'staging'
       @deployment_type = hl.ask("Enter the deployment type [#{@hotfix}/#{@weekly_release}(default)]: ") do |q|
         q.default = @weekly_release
         q.validate = /^(hotfix|weekly-release)$/i
@@ -258,6 +259,14 @@ module Samurai
         @release_pr_details ||= fetch_release_pr_details(repo, release_pr_id)
         send_email_notification(repo, @release_pr_details, release_pr_url)
       end
+
+      sync_branches_and_cleanup(release_branch_name)
+    end
+
+    def sync_branches_and_cleanup(release_branch_name)
+      `git checkout #{@target_branch_name} && git pull`
+      `git checkout #{@hotfix} && git pull && git pull origin #{@target_branch_name} --no-edit && git push`
+      `git checkout #{@staging} && git pull && git pull origin #{@target_branch_name} --no-edit && git push`
     end
 
     private
