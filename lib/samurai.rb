@@ -222,20 +222,20 @@ module Samurai
       `git checkout #{@source_branch_name} && git pull`
 
       current_date = DateTime.now.strftime('%d.%m.%y_%H_%M')
-      release_branch_name = "release-#{current_date}"
+      release_branch_name = "#{@deployment_type}-#{current_date}"
       `git checkout -b #{release_branch_name}`
-      puts "Created a release branch #{release_branch_name}"
+      puts "Created a #{@deployment_type.capitalize} branch #{release_branch_name}"
       `git push -u origin #{release_branch_name} --no-verify`
-      puts "Pushed release branch #{release_branch_name}"
+      puts "Pushed #{@deployment_type.capitalize} branch #{release_branch_name}"
 
       json_response = create_release_pr(fetch_repo_name, release_branch_name)
       release_pr_url = json_response['html_url']
-      puts "Created Release PR #{release_pr_url}"
+      puts "Created #{@deployment_type.capitalize} PR #{release_pr_url}"
       system('open', release_pr_url) # macos only
 
       hl = HighLine.new
       _res = hl.ask("Please approve the PR, Merge it and press enter to proceed")
-      puts 'Fetching release PR details...'
+      puts "Fetching #{@deployment_type.capitalize} PR details..."
 
       @release_pr_details = nil
 
