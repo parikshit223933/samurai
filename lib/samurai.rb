@@ -273,6 +273,30 @@ module Samurai
 
     private
 
+    def with_retry(delay: 1)
+      attempts = 0
+
+      loop do
+        attempts += 1
+        begin
+          return yield
+        rescue Octokit::TooManyRequests => e
+          # Handle rate limiting
+          reset_time = e.response_headers['x-ratelimit-reset'].to_i
+          sleep_time = [reset_time - Time.now.to_i, 0].max + 1
+          puts "Rate limited. Waiting #{sleep_time} seconds until rate limit resets..."
+          sleep(sleep_time)
+        rescue Octokit::ServerError, Octokit::BadGateway, Octokit::ServiceUnavailable, Faraday::ConnectionFailed, Faraday::TimeoutError, Errno::ECONNRESET, Errno::ETIMEDOUT => e
+          # Retry on server errors and network issues with constant delay
+          puts "API call failed (attempt #{attempts}): #{e.class} - #{e.message}. Retrying in #{delay} second(s)..."
+          sleep(delay)
+        rescue Octokit::NotFound
+          # Don't retry NotFound errors, let them bubble up to be handled by caller
+          raise
+        end
+      end
+    end
+
     def send_slack_message(repo, release_pr_details, release_pr_url)
       notifier = Slack::Notifier.new @slack_webhook_url
       message = build_slack_message(repo, release_pr_details, release_pr_url)
@@ -327,55 +351,61 @@ module Samurai
       contributors_hash = {}
 
       pr_numbers.each do |sub_pr_number|
-        pr = client.pull_request(repo, sub_pr_number)
-        next unless pr.base.ref == @source_branch_name
+        puts sub_pr_number
+        begin
+          pr = with_retry { client.pull_request(repo, sub_pr_number) }
+          next unless pr.base.ref == @source_branch_name
 
-        pr_commits = client.pull_request_commits(repo, sub_pr_number)
-        pr_reviews = client.pull_request_reviews(repo, sub_pr_number)
+          pr_commits = with_retry { client.pull_request_commits(repo, sub_pr_number) }
+          pr_reviews = with_retry { client.pull_request_reviews(repo, sub_pr_number) }
 
-        contributors = Hash.new(0)
-        merge_commit_contributors = []
+          contributors = Hash.new(0)
+          merge_commit_contributors = []
 
-        pr_commits.each do |commit|
-          author = commit.author&.login
-          if author
-            if merge_commit?(commit)
-              merge_commit_contributors << author
-            else
-              contributors[author] += 1
+          pr_commits.each do |commit|
+            author = commit.author&.login
+            if author
+              if merge_commit?(commit)
+                merge_commit_contributors << author
+              else
+                contributors[author] += 1
+              end
             end
           end
+
+          max_commits = contributors.values.max
+          major_contributors = contributors.select { |_, count| count == max_commits }.keys
+          minor_contributors = contributors.select { |_, count| count != max_commits }.keys
+          merge_commit_only_contributors = merge_commit_contributors.uniq - contributors.keys
+
+          merger = pr.merged_by&.login
+          reviewer = pr_reviews.map { |review| review.user.login }.uniq.first
+
+          # Extract the PR description part under "## Description" and before "### ClickUp Task Link"
+          pr_description = if @send_email
+                             pr.body&.match(/## Description\s*\n(.*?)\n\s*### ClickUp Task Link/m)&.captures&.first&.strip
+                           else
+                             nil
+                           end
+
+          contributors_hash[sub_pr_number] = {
+            pr_number: sub_pr_number,
+            major_contributors: major_contributors,
+            minor_contributors: minor_contributors,
+            reviewer: reviewer,
+            merger: merger,
+            pr_labels: pr.labels.map(&:name),
+            pr_creator: pr.user.login,
+            pr_title: pr.title,
+            pr_body: pr_description || pr.body || '********* NO DESCRIPTION PROVIDED. PLEASE CHECK THIS PR *********',
+            pr_created_at: pr.created_at,
+            pr_merged_at: pr.merged_at,
+            contributors_with_only_merge_commit_with_base_branch: merge_commit_only_contributors
+          }
+        rescue Octokit::NotFound => e
+          puts "Skipping PR ##{sub_pr_number} - PR not found (possibly referenced in commit message but doesn't exist)"
+          next
         end
-
-        max_commits = contributors.values.max
-        major_contributors = contributors.select { |_, count| count == max_commits }.keys
-        minor_contributors = contributors.select { |_, count| count != max_commits }.keys
-        merge_commit_only_contributors = merge_commit_contributors.uniq - contributors.keys
-
-        merger = pr.merged_by&.login
-        reviewer = pr_reviews.map { |review| review.user.login }.uniq.first
-
-        # Extract the PR description part under "## Description" and before "### ClickUp Task Link"
-        pr_description = if @send_email
-                           pr.body&.match(/## Description\s*\n(.*?)\n\s*### ClickUp Task Link/m)&.captures&.first&.strip
-                         else
-                           nil
-                         end
-
-        contributors_hash[sub_pr_number] = {
-          pr_number: sub_pr_number,
-          major_contributors: major_contributors,
-          minor_contributors: minor_contributors,
-          reviewer: reviewer,
-          merger: merger,
-          pr_labels: pr.labels.map(&:name),
-          pr_creator: pr.user.login,
-          pr_title: pr.title,
-          pr_body: pr_description || pr.body || '********* NO DESCRIPTION PROVIDED. PLEASE CHECK THIS PR *********',
-          pr_created_at: pr.created_at,
-          pr_merged_at: pr.merged_at,
-          contributors_with_only_merge_commit_with_base_branch: merge_commit_only_contributors
-        }
       end
 
       contributors_hash
@@ -386,7 +416,7 @@ module Samurai
       page = 1
 
       loop do
-        response = client.pull_request_commits(repo, pr_number, per_page: 100, page: page)
+        response = with_retry { client.pull_request_commits(repo, pr_number, per_page: 100, page: page) }
         break if response.empty?
         commits.concat(response)
         page += 1
