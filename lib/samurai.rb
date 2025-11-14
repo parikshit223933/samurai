@@ -273,7 +273,7 @@ module Samurai
 
     private
 
-    def with_retry(delay: 1)
+    def with_retry(delay: 1, max_retries: 5)
       attempts = 0
 
       loop do
@@ -288,7 +288,11 @@ module Samurai
           sleep(sleep_time)
         rescue Octokit::ServerError, Octokit::BadGateway, Octokit::ServiceUnavailable, Faraday::ConnectionFailed, Faraday::TimeoutError, Errno::ECONNRESET, Errno::ETIMEDOUT, OpenSSL::SSL::SSLError, Net::OpenTimeout, Net::ReadTimeout, SocketError => e
           # Retry on server errors, network issues, and SSL errors with constant delay
-          puts "Request failed (attempt #{attempts}): #{e.class} - #{e.message}. Retrying in #{delay} second(s)..."
+          if attempts >= max_retries
+            puts "Request failed after #{max_retries} attempts. Giving up."
+            raise
+          end
+          puts "Request failed (attempt #{attempts}/#{max_retries}): #{e.class} - #{e.message}. Retrying in #{delay} second(s)..."
           sleep(delay)
         rescue Octokit::NotFound
           # Don't retry NotFound errors, let them bubble up to be handled by caller
@@ -298,7 +302,18 @@ module Samurai
     end
 
     def send_slack_message(repo, release_pr_details, release_pr_url)
-      notifier = Slack::Notifier.new @slack_webhook_url
+      # Configure HTTP options to avoid SSL CRL verification issues with OpenSSL 3.x
+      # OpenSSL 3.x tries to fetch CRLs during handshake, but Net::HTTP can't make HTTP requests
+      # during SSL handshake. By explicitly setting cert_store, we use CA certs without CRL checking.
+      cert_store = OpenSSL::X509::Store.new
+      cert_store.set_default_paths
+
+      http_options = {
+        cert_store: cert_store,
+        verify_mode: OpenSSL::SSL::VERIFY_PEER
+      }
+
+      notifier = Slack::Notifier.new @slack_webhook_url, http_options: http_options
       message = build_slack_message(repo, release_pr_details, release_pr_url)
 
       with_retry(delay: 2) do
@@ -498,6 +513,12 @@ module Samurai
 
     def send_email_notification(repo, release_pr_details, release_pr_url)
       email_body = build_email_body(repo, release_pr_details, release_pr_url)
+
+      # Configure cert store to avoid SSL CRL verification issues with OpenSSL 3.x
+      # Same issue as Slack notifications - OpenSSL can't fetch CRLs during SSL handshake
+      custom_cert_store = OpenSSL::X509::Store.new
+      custom_cert_store.set_default_paths
+
       config = {
         address: @smtp_settings['address'],
         port: @smtp_settings['port'],
@@ -505,8 +526,22 @@ module Samurai
         user_name: @smtp_settings['user_name'],
         password: @smtp_settings['password'],
         authentication: @smtp_settings['authentication'],
-        enable_starttls_auto: @smtp_settings['enable_starttls_auto']
+        enable_starttls_auto: @smtp_settings['enable_starttls_auto'],
+        openssl_verify_mode: OpenSSL::SSL::VERIFY_PEER
       }
+
+      # Patch Net::SMTP to use our custom cert store using prepend
+      # This is cleaner than aliasing and avoids method redefinition issues
+      cert_store_patcher = Module.new do
+        define_method(:ssl_socket) do |socket, context|
+          # Inject our custom cert store into the context before creating SSL socket
+          context.cert_store = custom_cert_store
+          super(socket, context)
+        end
+      end
+
+      Net::SMTP.prepend(cert_store_patcher)
+
       Mail.defaults do
         delivery_method :smtp, config
       end
