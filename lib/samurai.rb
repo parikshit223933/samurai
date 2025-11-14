@@ -286,9 +286,9 @@ module Samurai
           sleep_time = [reset_time - Time.now.to_i, 0].max + 1
           puts "Rate limited. Waiting #{sleep_time} seconds until rate limit resets..."
           sleep(sleep_time)
-        rescue Octokit::ServerError, Octokit::BadGateway, Octokit::ServiceUnavailable, Faraday::ConnectionFailed, Faraday::TimeoutError, Errno::ECONNRESET, Errno::ETIMEDOUT => e
-          # Retry on server errors and network issues with constant delay
-          puts "API call failed (attempt #{attempts}): #{e.class} - #{e.message}. Retrying in #{delay} second(s)..."
+        rescue Octokit::ServerError, Octokit::BadGateway, Octokit::ServiceUnavailable, Faraday::ConnectionFailed, Faraday::TimeoutError, Errno::ECONNRESET, Errno::ETIMEDOUT, OpenSSL::SSL::SSLError, Net::OpenTimeout, Net::ReadTimeout, SocketError => e
+          # Retry on server errors, network issues, and SSL errors with constant delay
+          puts "Request failed (attempt #{attempts}): #{e.class} - #{e.message}. Retrying in #{delay} second(s)..."
           sleep(delay)
         rescue Octokit::NotFound
           # Don't retry NotFound errors, let them bubble up to be handled by caller
@@ -301,10 +301,12 @@ module Samurai
       notifier = Slack::Notifier.new @slack_webhook_url
       message = build_slack_message(repo, release_pr_details, release_pr_url)
 
-      notifier.ping message,
-                    channel: "##{@slack_channel_name}",
-                    username: @slack_user_name,
-                    icon_emoji: ":#{@slack_icon_emoji}:"
+      with_retry(delay: 2) do
+        notifier.ping message,
+                      channel: "##{@slack_channel_name}",
+                      username: @slack_user_name,
+                      icon_emoji: ":#{@slack_icon_emoji}:"
+      end
     end
 
     def build_slack_message(repo, release_pr_details, release_pr_url)
