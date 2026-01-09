@@ -354,6 +354,7 @@ module Samurai
     end
 
     def convert_to_ist(utc_time)
+      return 'N/A' if utc_time.nil?
       Time.parse(utc_time.to_s).getlocal('+05:30').strftime('%d %B %Y, %I:%M%p')
     end
 
@@ -372,6 +373,7 @@ module Samurai
         begin
           pr = with_retry { client.pull_request(repo, sub_pr_number) }
           next unless pr.base.ref == @source_branch_name
+          next if pr.merged_at.nil?
 
           pr_commits = with_retry { client.pull_request_commits(repo, sub_pr_number) }
           pr_reviews = with_retry { client.pull_request_reviews(repo, sub_pr_number) }
