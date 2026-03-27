@@ -263,15 +263,107 @@ module Samurai
       sync_branches_and_cleanup(release_branch_name)
     end
 
-    def sync_branches_and_cleanup(release_branch_name)
+    no_commands do
+      def sync_branches_and_cleanup(release_branch_name)
       `git checkout #{@target_branch_name} && git pull`
       `git checkout #{@hotfix} && git pull && git pull origin #{@target_branch_name} --no-edit && git push`
       `git checkout #{@staging} && git pull && git pull origin #{@target_branch_name} --no-edit && git push`
       puts "deleting release branch #{release_branch_name}"
       `git branch -d #{release_branch_name}`
     end
+    end
+
+    desc "lock", "Lock the staging branch (prevent merges during deployment)"
+    def lock
+      update_branch_protection(lock: true)
+    end
+
+    desc "unlock", "Unlock the staging branch (allow merges after deployment)"
+    def unlock
+      update_branch_protection(lock: false)
+    end
 
     private
+
+    def update_branch_protection(lock:)
+      config = load_config
+      current_config = config[Dir.pwd]
+      if current_config.nil?
+        puts 'This directory is not configured. Run "samurai config" first.'
+        exit(1)
+      end
+
+      token = current_config['token']
+      branch = current_config['source_branch_name'] || 'staging'
+      repo = fetch_repo_name
+      action = lock ? 'Locking' : 'Unlocking'
+
+      puts "Repository: #{repo}"
+      puts "#{action} #{branch} branch..."
+
+      headers = {
+        'Authorization' => "token #{token}",
+        'Accept' => 'application/vnd.github.v3+json'
+      }
+      url = "https://api.github.com/repos/#{repo}/branches/#{branch}/protection"
+
+      # Step 1: Find the staging branch protection rule
+      begin
+        response = RestClient.get(url, headers)
+        current = JSON.parse(response.body)
+        puts "Found branch protection rule for '#{branch}'"
+      rescue RestClient::NotFound
+        puts "No branch protection rule found for '#{branch}' on #{repo}. Nothing to #{lock ? 'lock' : 'unlock'}."
+        exit(1)
+      end
+
+      # Step 2: Build PUT body preserving all existing settings
+      body = {
+        required_status_checks: current['required_status_checks'] ? {
+          strict: current['required_status_checks']['strict'],
+          contexts: current['required_status_checks']['contexts']
+        } : nil,
+        enforce_admins: current.dig('enforce_admins', 'enabled') || false,
+        required_pull_request_reviews: current['required_pull_request_reviews'] ? {
+          dismiss_stale_reviews: current['required_pull_request_reviews']['dismiss_stale_reviews'],
+          require_code_owner_reviews: current['required_pull_request_reviews']['require_code_owner_reviews'],
+          require_last_push_approval: current['required_pull_request_reviews']['require_last_push_approval'],
+          required_approving_review_count: current['required_pull_request_reviews']['required_approving_review_count']
+        } : nil,
+        restrictions: lock ? { users: [], teams: [], apps: [] } : nil,
+        required_linear_history: current.dig('required_linear_history', 'enabled') || false,
+        allow_force_pushes: current.dig('allow_force_pushes', 'enabled') || false,
+        allow_deletions: current.dig('allow_deletions', 'enabled') || false,
+        block_creations: current.dig('block_creations', 'enabled') || false,
+        required_conversation_resolution: current.dig('required_conversation_resolution', 'enabled') || false,
+        lock_branch: lock,
+        allow_fork_syncing: current.dig('allow_fork_syncing', 'enabled') || false
+      }
+
+      # Step 3: Apply the update
+      RestClient.put(url, body.to_json, headers)
+
+      # Step 4: Verify by re-fetching
+      verify_response = RestClient.get(url, headers)
+      updated = JSON.parse(verify_response.body)
+
+      lock_ok = updated.dig('lock_branch', 'enabled') == lock
+      restrictions_ok = lock ? !updated['restrictions'].nil? : updated['restrictions'].nil?
+
+      if lock_ok && restrictions_ok
+        puts "Lock branch: #{lock ? 'enabled' : 'disabled'} [OK]"
+        puts "Restrict who can push: #{lock ? 'enabled' : 'disabled'} [OK]"
+        puts "Both checks marked successfully."
+      else
+        puts "Lock branch: #{updated.dig('lock_branch', 'enabled') ? 'enabled' : 'disabled'} [#{lock_ok ? 'OK' : 'FAILED'}]"
+        puts "Restrict who can push: #{updated['restrictions'] ? 'enabled' : 'disabled'} [#{restrictions_ok ? 'OK' : 'FAILED'}]"
+        puts "One or more checks were not marked successfully."
+        exit(1)
+      end
+    rescue RestClient::ExceptionWithResponse => e
+      puts "Failed to #{lock ? 'lock' : 'unlock'} branch: #{e.response&.body}"
+      exit(1)
+    end
 
     def with_retry(delay: 1, max_retries: 5)
       attempts = 0
