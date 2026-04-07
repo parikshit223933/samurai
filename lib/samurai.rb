@@ -8,6 +8,7 @@ require 'slack-notifier'
 require 'time'
 require 'rest-client'
 require 'mail'
+require 'open3'
 
 module Samurai
   class CLI < Thor
@@ -213,20 +214,27 @@ module Samurai
 
       puts 'Make sure your paths are clean and there is nothing to commit'
 
+      clear_index_lock
+
       puts 'Stashing existing changes (if any)'
-      `git add . && git stash`
+      run_git('add .', abort_on_failure: false)
+      run_git('stash', abort_on_failure: false)
       puts 'Resetting original repository state'
-      `git reset`
+      run_git('reset', abort_on_failure: false)
+      clear_index_lock
+
       puts "Pulling #{@target_branch_name}"
-      `git checkout #{@target_branch_name} && git pull`
+      run_git("checkout #{@target_branch_name}")
+      run_git('pull')
       puts "Pulling #{@source_branch_name}"
-      `git checkout #{@source_branch_name} && git pull`
+      run_git("checkout #{@source_branch_name}")
+      run_git('pull')
 
       current_date = DateTime.now.strftime('%d.%m.%y_%H_%M')
       release_branch_name = "#{@deployment_type}-#{current_date}"
-      `git checkout -b #{release_branch_name}`
+      run_git("checkout -b #{release_branch_name}")
       puts "Created a #{@deployment_type.capitalize} branch #{release_branch_name}"
-      `git push -u origin #{release_branch_name} --no-verify`
+      run_git("push -u origin #{release_branch_name} --no-verify")
       puts "Pushed #{@deployment_type.capitalize} branch #{release_branch_name}"
 
       json_response = create_release_pr(fetch_repo_name, release_branch_name)
@@ -247,9 +255,11 @@ module Samurai
         send_slack_message(repo, @release_pr_details, release_pr_url)
       end
 
-      `git checkout #{@target_branch_name} && git pull origin #{@target_branch_name}`
-      `git tag #{current_date} -m "#{release_branch_name}"`
-      `git push origin #{@target_branch_name} --no-verify --follow-tags`
+      clear_index_lock
+      run_git("checkout #{@target_branch_name}")
+      run_git("pull origin #{@target_branch_name}")
+      run_git("tag #{current_date} -m \"#{release_branch_name}\"")
+      run_git("push origin #{@target_branch_name} --no-verify --follow-tags")
       puts "PUSHED #{@target_branch_name} AND TAG #{current_date}"
 
       if @send_email
@@ -265,11 +275,22 @@ module Samurai
 
     no_commands do
       def sync_branches_and_cleanup(release_branch_name)
-      `git checkout #{@target_branch_name} && git pull`
-      `git checkout #{@hotfix} && git pull && git pull origin #{@target_branch_name} --no-edit && git push`
-      `git checkout #{@staging} && git pull && git pull origin #{@target_branch_name} --no-edit && git push`
+      clear_index_lock
+      run_git("checkout #{@target_branch_name}")
+      run_git('pull')
+
+      run_git("checkout #{@hotfix}")
+      run_git('pull')
+      run_git("pull origin #{@target_branch_name} --no-edit")
+      run_git('push')
+
+      run_git("checkout #{@staging}")
+      run_git('pull')
+      run_git("pull origin #{@target_branch_name} --no-edit")
+      run_git('push')
+
       puts "deleting release branch #{release_branch_name}"
-      `git branch -d #{release_branch_name}`
+      run_git("branch -D #{release_branch_name}", abort_on_failure: false)
     end
     end
 
@@ -284,6 +305,29 @@ module Samurai
     end
 
     private
+
+    def run_git(command, abort_on_failure: true)
+      full_command = "git #{command}"
+      stdout, stderr, status = Open3.capture3(full_command)
+      puts stdout.strip unless stdout.strip.empty?
+      unless status.success?
+        puts "ERROR: `#{full_command}` failed (exit #{status.exitstatus})"
+        puts stderr.strip unless stderr.strip.empty?
+        if abort_on_failure
+          puts 'Aborting.'
+          exit(1)
+        end
+      end
+      stdout.strip
+    end
+
+    def clear_index_lock
+      lock_file = File.join(@current_directory, '.git', 'index.lock')
+      return unless File.exist?(lock_file)
+
+      puts "WARNING: Stale .git/index.lock found. Removing it."
+      FileUtils.rm_f(lock_file)
+    end
 
     def update_branch_protection(lock:)
       config = load_config
@@ -600,7 +644,7 @@ module Samurai
         res = RestClient.post(url, body.to_json, headers)
         JSON.parse(res.body)
       rescue StandardError => e
-        pp JSON.parse(@e.response.body)['errors']
+        pp JSON.parse(e.response.body)['errors']
         exit(1)
       end
     end
