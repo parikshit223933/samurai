@@ -259,8 +259,6 @@ module Samurai
       run_git("checkout #{@target_branch_name}")
       run_git("pull origin #{@target_branch_name}")
       run_git("tag #{current_date} -m \"#{release_branch_name}\"")
-      run_git("push origin #{@target_branch_name} --no-verify --follow-tags")
-      puts "PUSHED #{@target_branch_name} AND TAG #{current_date}"
 
       if @send_email
         puts 'Sending email to configured users'
@@ -270,11 +268,11 @@ module Samurai
         send_email_notification(repo, @release_pr_details, release_pr_url)
       end
 
-      sync_branches_and_cleanup(release_branch_name)
+      sync_branches_and_cleanup(release_branch_name, current_date)
     end
 
     no_commands do
-      def sync_branches_and_cleanup(release_branch_name)
+      def sync_branches_and_cleanup(release_branch_name, current_date)
       clear_index_lock
       run_git("checkout #{@target_branch_name}")
       run_git('pull')
@@ -282,12 +280,20 @@ module Samurai
       run_git("checkout #{@hotfix}")
       run_git('pull')
       run_git("pull origin #{@target_branch_name} --no-edit")
-      run_git('push')
 
       run_git("checkout #{@staging}")
       run_git('pull')
       run_git("pull origin #{@target_branch_name} --no-edit")
-      run_git('push')
+
+      # Single atomic push of master, hotfix, staging, and the release tag.
+      # Consolidates what used to be three separate pushes (master+tag, hotfix, staging)
+      # into one burst so GitHub's webhooks arrive at Jenkins close enough together
+      # to be coalesced into a single queued build instead of racing the SCM poll.
+      run_git(
+        "push origin #{@target_branch_name} #{@hotfix} #{@staging} " \
+          "refs/tags/#{current_date} --atomic --no-verify"
+      )
+      puts "PUSHED #{@target_branch_name}, #{@hotfix}, #{@staging} AND TAG #{current_date}"
 
       puts "deleting release branch #{release_branch_name}"
       run_git("branch -D #{release_branch_name}", abort_on_failure: false)
