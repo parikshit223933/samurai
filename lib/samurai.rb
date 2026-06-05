@@ -627,8 +627,15 @@ module Samurai
     def extract_pr_numbers(commit_messages)
       pr_numbers = []
       commit_messages.each do |message|
-        matches = message.scan(/#(\d+)/)
-        pr_numbers.concat(matches.flatten)
+        # Only inspect the subject line (first line). GitHub records the PR number there
+        # as a squash-merge suffix "Title (#123)" or a merge commit "Merge pull request #123 from ...".
+        # Scanning the whole message would wrongly pick up prose in the body such as
+        # "(PR review #1, #3)" or "the night #12844 merged", pulling unrelated/ancient PRs
+        # into the release notes.
+        subject = message.to_s.split("\n", 2).first.to_s
+        subject.scan(/\(#(\d+)\)|Merge pull request #(\d+)/).each do |squash_ref, merge_ref|
+          pr_numbers << (squash_ref || merge_ref)
+        end
       end
       pr_numbers.uniq
     end
