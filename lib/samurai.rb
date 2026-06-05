@@ -540,7 +540,7 @@ module Samurai
           merge_commit_only_contributors = merge_commit_contributors.uniq - contributors.keys
 
           merger = pr.merged_by&.login
-          reviewer = pr_reviews.map { |review| review.user.login }.uniq.first
+          reviewer = pr_reviews.map { |review| review.user&.login }.compact.uniq.first
 
           # Extract the PR description part under "## Description" and before "### ClickUp Task Link"
           pr_description = if @send_email
@@ -556,7 +556,7 @@ module Samurai
             reviewer: reviewer,
             merger: merger,
             pr_labels: pr.labels.map(&:name),
-            pr_creator: pr.user.login,
+            pr_creator: pr.user&.login,
             pr_title: pr.title,
             pr_body: pr_description || pr.body || '********* NO DESCRIPTION PROVIDED. PLEASE CHECK THIS PR *********',
             pr_created_at: pr.created_at,
