@@ -265,7 +265,13 @@ module Samurai
         release_pr_id = json_response['number']
         repo = fetch_repo_name
         @release_pr_details ||= fetch_release_pr_details(repo, release_pr_id)
-        send_email_notification(repo, @release_pr_details, release_pr_url)
+        begin
+          send_email_notification(repo, @release_pr_details, release_pr_url)
+        rescue StandardError => e
+          # The email is a notification, not part of the deploy. A mail failure must
+          # never strand the release before the branch sync + push below.
+          puts "WARNING: email notification failed (#{e.class}: #{e.message}); continuing with deployment."
+        end
       end
 
       sync_branches_and_cleanup(release_branch_name, current_date)
@@ -678,7 +684,12 @@ module Samurai
         password: @smtp_settings['password'],
         authentication: @smtp_settings['authentication'],
         enable_starttls_auto: @smtp_settings['enable_starttls_auto'],
-        openssl_verify_mode: OpenSSL::SSL::VERIFY_PEER
+        openssl_verify_mode: OpenSSL::SSL::VERIFY_PEER,
+        # SendGrid can be slow to return the final "250 OK" after the message body is
+        # sent; the 60s default read timeout makes deliver! raise Net::ReadTimeout even
+        # though the mail was already accepted. Be generous so the ack has time to arrive.
+        open_timeout: 30,
+        read_timeout: 180
       }
 
       # Patch Net::SMTP to use our custom cert store using prepend
@@ -714,7 +725,14 @@ module Samurai
         end
       end
 
-      mail.deliver!
+      # Retry transient SMTP/network failures (connection resets, timeouts, SSL hiccups),
+      # reusing the same backoff used for GitHub/Slack calls.
+      # NOTE: a Net::ReadTimeout can mean the message was already delivered and only the
+      # server's acknowledgement was lost, so a retry may send a duplicate. The generous
+      # read_timeout above is the primary guard; retries cover genuine pre-delivery failures.
+      with_retry(delay: 2) do
+        mail.deliver!
+      end
     end
 
     def build_email_body(repo, release_pr_details, release_pr_url)
