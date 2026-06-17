@@ -434,8 +434,10 @@ module Samurai
           sleep_time = [reset_time - Time.now.to_i, 0].max + 1
           puts "Rate limited. Waiting #{sleep_time} seconds until rate limit resets..."
           sleep(sleep_time)
-        rescue Octokit::ServerError, Octokit::BadGateway, Octokit::ServiceUnavailable, Faraday::ConnectionFailed, Faraday::TimeoutError, Errno::ECONNRESET, Errno::ETIMEDOUT, OpenSSL::SSL::SSLError, Net::OpenTimeout, Net::ReadTimeout, SocketError => e
-          # Retry on server errors, network issues, and SSL errors with constant delay
+        rescue Octokit::ServerError, Octokit::BadGateway, Octokit::ServiceUnavailable, Faraday::ConnectionFailed, Faraday::TimeoutError, Faraday::SSLError, Errno::ECONNRESET, Errno::ETIMEDOUT, OpenSSL::SSL::SSLError, Net::OpenTimeout, Net::ReadTimeout, SocketError => e
+          # Retry on server errors, network issues, and SSL errors (incl. Faraday::SSLError,
+          # which Faraday 2.x raises wrapping OpenSSL::SSL::SSLError -- it is NOT a subclass of
+          # OpenSSL::SSL::SSLError, so it must be named explicitly or the retry is skipped) with constant delay
           if attempts >= max_retries
             puts "Request failed after #{max_retries} attempts. Giving up."
             raise
