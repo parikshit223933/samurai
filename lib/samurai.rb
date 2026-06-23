@@ -318,19 +318,43 @@ module Samurai
 
     private
 
-    def run_git(command, abort_on_failure: true)
+    # Transient git failures caused by a concurrent fetch racing ours, NOT a real error.
+    # The usual culprit is an editor's background autofetch (VS Code's Git extension runs
+    # `git fetch origin --recurse-submodules=no --progress --prune` every few minutes):
+    # right after the release PR is merged it updates refs/remotes/origin/<branch> at the
+    # same instant our `git pull origin <target>` does, so git loses the compare-and-swap
+    # and aborts with "cannot lock ref ... unable to update local ref". A plain `git pull`
+    # can likewise bail with "no such ref was fetched" when its fetch step is stepped on.
+    # The competing process has already finished by the time we see the error, so a short
+    # retry succeeds. Without this, the deploy strands between the merge and the branch
+    # sync (master tagged/pushed but hotfix+staging left behind), needing a manual finish.
+    TRANSIENT_GIT_ERROR = /cannot lock ref|unable to update local ref|no such ref was fetched/i
+
+    def run_git(command, abort_on_failure: true, max_retries: 5, retry_delay: 1)
       full_command = "git #{command}"
-      stdout, stderr, status = Open3.capture3(full_command)
-      puts stdout.strip unless stdout.strip.empty?
-      unless status.success?
+      attempt = 0
+      loop do
+        attempt += 1
+        stdout, stderr, status = Open3.capture3(full_command)
+        puts stdout.strip unless stdout.strip.empty?
+        return stdout.strip if status.success?
+
+        if stderr =~ TRANSIENT_GIT_ERROR && attempt <= max_retries
+          puts "WARNING: `#{full_command}` lost a ref-update race to a concurrent fetch " \
+               "(attempt #{attempt}/#{max_retries}). Retrying in #{retry_delay}s..."
+          puts stderr.strip unless stderr.strip.empty?
+          sleep(retry_delay)
+          next
+        end
+
         puts "ERROR: `#{full_command}` failed (exit #{status.exitstatus})"
         puts stderr.strip unless stderr.strip.empty?
         if abort_on_failure
           puts 'Aborting.'
           exit(1)
         end
+        return stdout.strip
       end
-      stdout.strip
     end
 
     def clear_index_lock
