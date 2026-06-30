@@ -330,6 +330,15 @@ module Samurai
     # sync (master tagged/pushed but hotfix+staging left behind), needing a manual finish.
     TRANSIENT_GIT_ERROR = /cannot lock ref|unable to update local ref|no such ref was fetched/i
 
+    # A stale or contended .git/index.lock. Either a prior git op crashed and left it behind,
+    # or a concurrent process (typically an IDE's Git integration running status/add on the
+    # same repo) holds it for an instant exactly as our checkout/pull/merge tries to take it.
+    # git aborts with "Unable to create '.../index.lock': File exists / Another git process
+    # seems to be running". A live competitor releases it within a second, so we wait and
+    # retry; if the lock outlives the wait it is stale, so we remove it before retrying.
+    # Without this the deploy strands mid branch-sync (master pushed, hotfix+staging behind).
+    INDEX_LOCK_ERROR = /index\.lock|Another git process seems to be running/i
+
     def run_git(command, abort_on_failure: true, max_retries: 5, retry_delay: 1)
       full_command = "git #{command}"
       attempt = 0
@@ -344,6 +353,18 @@ module Samurai
                "(attempt #{attempt}/#{max_retries}). Retrying in #{retry_delay}s..."
           puts stderr.strip unless stderr.strip.empty?
           sleep(retry_delay)
+          next
+        end
+
+        if stderr =~ INDEX_LOCK_ERROR && attempt <= max_retries
+          puts "WARNING: `#{full_command}` blocked by .git/index.lock " \
+               "(attempt #{attempt}/#{max_retries}). Waiting for any concurrent git process..."
+          puts stderr.strip unless stderr.strip.empty?
+          sleep(retry_delay)
+          # A live competitor (e.g. an IDE git op) releases the lock within the wait above; if
+          # it is still there it is stale from a crashed git process, so remove it. Clear only
+          # from the 2nd attempt so we never yank a lock a legitimate op is briefly holding.
+          clear_index_lock if attempt >= 2
           next
         end
 
