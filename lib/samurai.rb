@@ -339,6 +339,15 @@ module Samurai
     # Without this the deploy strands mid branch-sync (master pushed, hotfix+staging behind).
     INDEX_LOCK_ERROR = /index\.lock|Another git process seems to be running/i
 
+    # The remote is unreachable: Wi-Fi/VPN dropped, DNS can't resolve the host, or the TCP/TLS
+    # (or SSH) connection to it failed, mid pull/push. Unlike the ref-lock and index-lock races
+    # above this is not same-machine contention -- the only fix is to wait for connectivity to
+    # come back. run_git retries these INDEFINITELY (capped backoff, ignoring max_retries) so a
+    # network blip never strands the deploy between the merge and the branch sync/push. Kept
+    # deliberately specific -- no bare "unable to access" -- so genuine auth/404/non-fast-forward
+    # failures, which never self-resolve, still fail fast instead of looping forever.
+    NETWORK_GIT_ERROR = /Could not resolve host|Could not resolve hostname|Couldn't resolve host|Failed to connect|Connection timed out|Connection refused|Network is unreachable|No route to host|Temporary failure in name resolution|The remote end hung up unexpectedly|Connection reset by peer|early EOF|RPC failed|Operation timed out|ssh: connect to host|Could not read from remote repository|kex_exchange_identification/i
+
     def run_git(command, abort_on_failure: true, max_retries: 5, retry_delay: 1)
       full_command = "git #{command}"
       attempt = 0
@@ -365,6 +374,17 @@ module Samurai
           # it is still there it is stale from a crashed git process, so remove it. Clear only
           # from the 2nd attempt so we never yank a lock a legitimate op is briefly holding.
           clear_index_lock if attempt >= 2
+          next
+        end
+
+        # Network unreachable: retry forever (no max_retries cap) with capped exponential
+        # backoff so a dropped connection is waited out, not fatal to the deploy.
+        if stderr =~ NETWORK_GIT_ERROR
+          wait = [retry_delay * (2**[attempt - 1, 8].min), 30].min
+          puts "WARNING: `#{full_command}` can't reach the remote (attempt #{attempt}) -- " \
+               "network appears down. Waiting for connectivity, retrying in #{wait}s..."
+          puts stderr.strip unless stderr.strip.empty?
+          sleep(wait)
           next
         end
 
@@ -466,7 +486,27 @@ module Samurai
       exit(1)
     end
 
-    def with_retry(delay: 1, max_retries: 5)
+    # By default with_retry never gives up on a transient failure -- it keeps retrying until
+    # the call finally succeeds. A dropped Wi-Fi/VPN or a server hiccup mid-release used to
+    # burn through 5 attempts in a few seconds and then crash, stranding a half-finished
+    # deploy (release PR merged but hotfix/staging left unsynced) and forcing a manual finish.
+    # Every call wrapped here is idempotent (GitHub reads, a Slack ping), so waiting out the
+    # outage is strictly safer than aborting. Backoff grows exponentially and is capped at
+    # max_delay so we poll gently while the network is down but reconnect promptly once it
+    # returns.
+    #
+    # max_retries defaults to infinity; a caller that must stay bounded passes a finite value
+    # -- notably the email step, which is intentionally non-fatal and must not hang the release
+    # forever on a persistent SMTP outage (a blind retry there also risks a duplicate send).
+    RETRYABLE_ERRORS = [
+      Octokit::ServerError, Octokit::BadGateway, Octokit::ServiceUnavailable,
+      Faraday::ConnectionFailed, Faraday::TimeoutError, Faraday::SSLError,
+      Errno::ECONNRESET, Errno::ETIMEDOUT, Errno::ECONNREFUSED,
+      Errno::ENETUNREACH, Errno::EHOSTUNREACH, Errno::EHOSTDOWN,
+      OpenSSL::SSL::SSLError, Net::OpenTimeout, Net::ReadTimeout, SocketError
+    ].freeze
+
+    def with_retry(delay: 1, max_retries: Float::INFINITY, max_delay: 30)
       attempts = 0
 
       loop do
@@ -474,21 +514,25 @@ module Samurai
         begin
           return yield
         rescue Octokit::TooManyRequests => e
-          # Handle rate limiting
+          # Rate limited: wait until the documented reset, then retry. Never counts against
+          # max_retries -- the reset header is a promise of future success, not a failure.
           reset_time = e.response_headers['x-ratelimit-reset'].to_i
           sleep_time = [reset_time - Time.now.to_i, 0].max + 1
           puts "Rate limited. Waiting #{sleep_time} seconds until rate limit resets..."
           sleep(sleep_time)
-        rescue Octokit::ServerError, Octokit::BadGateway, Octokit::ServiceUnavailable, Faraday::ConnectionFailed, Faraday::TimeoutError, Faraday::SSLError, Errno::ECONNRESET, Errno::ETIMEDOUT, OpenSSL::SSL::SSLError, Net::OpenTimeout, Net::ReadTimeout, SocketError => e
-          # Retry on server errors, network issues, and SSL errors (incl. Faraday::SSLError,
-          # which Faraday 2.x raises wrapping OpenSSL::SSL::SSLError -- it is NOT a subclass of
-          # OpenSSL::SSL::SSLError, so it must be named explicitly or the retry is skipped) with constant delay
+        rescue *RETRYABLE_ERRORS => e
+          # Server errors, network drops, timeouts, SSL hiccups. Faraday::SSLError must be
+          # named explicitly: Faraday 2.x wraps OpenSSL::SSL::SSLError but is NOT a subclass
+          # of it, so it would otherwise slip past this rescue.
           if attempts >= max_retries
-            puts "Request failed after #{max_retries} attempts. Giving up."
+            puts "Request failed after #{attempts} attempt(s): #{e.class} - #{e.message}. Giving up."
             raise
           end
-          puts "Request failed (attempt #{attempts}/#{max_retries}): #{e.class} - #{e.message}. Retrying in #{delay} second(s)..."
-          sleep(delay)
+          wait = [delay * (2**[attempts - 1, 8].min), max_delay].min
+          limit = max_retries.finite? ? "/#{max_retries.to_i}" : ''
+          puts "Request failed (attempt #{attempts}#{limit}): #{e.class} - #{e.message}. " \
+               "Waiting for connectivity; retrying in #{wait}s..."
+          sleep(wait)
         rescue Octokit::NotFound
           # Don't retry NotFound errors, let them bubble up to be handled by caller
           raise
@@ -777,7 +821,11 @@ module Samurai
       # NOTE: a Net::ReadTimeout can mean the message was already delivered and only the
       # server's acknowledgement was lost, so a retry may send a duplicate. The generous
       # read_timeout above is the primary guard; retries cover genuine pre-delivery failures.
-      with_retry(delay: 2) do
+      # Bounded on purpose: email is a non-fatal notification (see the rescue at the call site
+      # in execute). It must NOT inherit with_retry's default infinite retry, or a persistent
+      # SMTP outage would hang the release forever instead of being skipped; a blind retry can
+      # also duplicate a message SendGrid already accepted but failed to ack in time.
+      with_retry(delay: 2, max_retries: 5) do
         mail.deliver!
       end
     end
