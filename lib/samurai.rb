@@ -427,9 +427,9 @@ module Samurai
     # lock/unlock go through GitHub's GraphQL updateBranchProtectionRule, NOT the REST
     # `PUT /repos/{repo}/branches/{branch}/protection` used before. That PUT replaces the WHOLE
     # rule, so flipping two flags meant re-sending every setting -- including each required
-    # status check, whose app GitHub re-resolves on every PUT -- and on a busy repo (NinjasTool:
-    # 5 required checks, ~270 open PRs into staging) it ran past GitHub's timeout and came back
-    # as {"message": "Server Error"} even though the lock had been saved. Anything its body
+    # status check, whose app GitHub re-resolves on every PUT -- and on a busy repo (several
+    # required checks, hundreds of open PRs into staging) it ran past GitHub's timeout and came
+    # back as {"message": "Server Error"} even though the lock had been saved. Anything its body
     # didn't carry (bypass/dismissal lists, ...) was also reset on every lock and unlock.
     # The mutation changes only the fields it is given; the rest of the rule is never sent.
     BRANCH_PROTECTION_RULE_FIELDS = 'id pattern lockBranch restrictsPushes pushAllowances { totalCount }'.freeze
