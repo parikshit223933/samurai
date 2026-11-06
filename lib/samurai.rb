@@ -406,6 +406,63 @@ module Samurai
       FileUtils.rm_f(lock_file)
     end
 
+    # lock/unlock go through GitHub's GraphQL updateBranchProtectionRule, NOT the REST
+    # `PUT /repos/{repo}/branches/{branch}/protection` used before. That PUT replaces the WHOLE
+    # rule, so flipping two flags meant re-sending every setting -- including each required
+    # status check, whose app GitHub re-resolves on every PUT -- and on a busy repo (NinjasTool:
+    # 5 required checks, ~270 open PRs into staging) it ran past GitHub's timeout and came back
+    # as {"message": "Server Error"} even though the lock had been saved. Anything its body
+    # didn't carry (bypass/dismissal lists, ...) was also reset on every lock and unlock.
+    # The mutation changes only the fields it is given; the rest of the rule is never sent.
+    BRANCH_PROTECTION_RULE_FIELDS = 'id pattern lockBranch restrictsPushes pushAllowances { totalCount }'.freeze
+
+    BRANCH_PROTECTION_RULES_QUERY = <<~GRAPHQL.freeze
+      query($owner: String!, $name: String!, $cursor: String) {
+        repository(owner: $owner, name: $name) {
+          branchProtectionRules(first: 100, after: $cursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes { #{BRANCH_PROTECTION_RULE_FIELDS} }
+          }
+        }
+      }
+    GRAPHQL
+
+    BRANCH_PROTECTION_RULE_QUERY = <<~GRAPHQL.freeze
+      query($id: ID!) {
+        node(id: $id) { ... on BranchProtectionRule { #{BRANCH_PROTECTION_RULE_FIELDS} } }
+      }
+    GRAPHQL
+
+    # Locked = read-only AND pushes restricted to nobody (empty allow-list).
+    LOCK_BRANCH_MUTATION = <<~GRAPHQL.freeze
+      mutation($id: ID!) {
+        updateBranchProtectionRule(input: {
+          branchProtectionRuleId: $id, lockBranch: true, restrictsPushes: true, pushActorIds: []
+        }) { branchProtectionRule { #{BRANCH_PROTECTION_RULE_FIELDS} } }
+      }
+    GRAPHQL
+
+    UNLOCK_BRANCH_MUTATION = <<~GRAPHQL.freeze
+      mutation($id: ID!) {
+        updateBranchProtectionRule(input: {
+          branchProtectionRuleId: $id, lockBranch: false, restrictsPushes: false
+        }) { branchProtectionRule { #{BRANCH_PROTECTION_RULE_FIELDS} } }
+      }
+    GRAPHQL
+
+    # lock/unlock is a one-shot command someone is watching, so after this many tries give up
+    # and point at the settings page instead of hanging (backoff 2, 4, 8, 16, 30s).
+    BRANCH_PROTECTION_MAX_ATTEMPTS = 6
+
+    # A GitHub call that can succeed if repeated: HTTP 5xx, a timeout, a dropped connection, or
+    # GraphQL's "Something went wrong ... may be the result of a timeout". For a WRITE this
+    # means the outcome is unknown -- GitHub may have saved the change before failing.
+    class GitHubTransientError < StandardError; end
+
+    # A GitHub call that will fail the same way if repeated: bad token, no admin rights on the
+    # repo, unknown repo, invalid input.
+    class GitHubRequestError < StandardError; end
+
     def update_branch_protection(lock:)
       config = load_config
       current_config = config[Dir.pwd]
@@ -417,73 +474,167 @@ module Samurai
       token = current_config['token']
       branch = current_config['source_branch_name'] || 'staging'
       repo = fetch_repo_name
-      action = lock ? 'Locking' : 'Unlocking'
+      owner, name = repo.split('/', 2)
+      verb = lock ? 'lock' : 'unlock'
 
       puts "Repository: #{repo}"
-      puts "#{action} #{branch} branch..."
+      puts "#{lock ? 'Locking' : 'Unlocking'} #{branch} branch..."
 
-      headers = {
-        'Authorization' => "token #{token}",
-        'Accept' => 'application/vnd.github.v3+json'
-      }
-      url = "https://api.github.com/repos/#{repo}/branches/#{branch}/protection"
-
-      # Step 1: Find the staging branch protection rule
-      begin
-        response = RestClient.get(url, headers)
-        current = JSON.parse(response.body)
-        puts "Found branch protection rule for '#{branch}'"
-      rescue RestClient::NotFound
-        puts "No branch protection rule found for '#{branch}' on #{repo}. Nothing to #{lock ? 'lock' : 'unlock'}."
+      rules = with_github_retry('Reading branch protection rules') do
+        fetch_branch_protection_rules(token, owner, name)
+      end
+      rule = rules.find { |r| r['pattern'] == branch }
+      if rule.nil?
+        puts "No branch protection rule found for '#{branch}' on #{repo}. Nothing to #{verb}."
+        # Never fall back to a wildcard rule: locking e.g. "*" would lock every branch it matches.
+        wildcard = rules.find { |r| File.fnmatch?(r['pattern'], branch, File::FNM_PATHNAME) }
+        puts "('#{branch}' is only covered by the wildcard rule '#{wildcard['pattern']}', which samurai won't touch.)" if wildcard
         exit(1)
       end
+      puts "Found branch protection rule for '#{branch}'"
 
-      # Step 2: Build PUT body preserving all existing settings
-      body = {
-        required_status_checks: current['required_status_checks'] ? {
-          strict: current['required_status_checks']['strict'],
-          contexts: current['required_status_checks']['contexts']
-        } : nil,
-        enforce_admins: current.dig('enforce_admins', 'enabled') || false,
-        required_pull_request_reviews: current['required_pull_request_reviews'] ? {
-          dismiss_stale_reviews: current['required_pull_request_reviews']['dismiss_stale_reviews'],
-          require_code_owner_reviews: current['required_pull_request_reviews']['require_code_owner_reviews'],
-          require_last_push_approval: current['required_pull_request_reviews']['require_last_push_approval'],
-          required_approving_review_count: current['required_pull_request_reviews']['required_approving_review_count']
-        } : nil,
-        restrictions: lock ? { users: [], teams: [], apps: [] } : nil,
-        required_linear_history: current.dig('required_linear_history', 'enabled') || false,
-        allow_force_pushes: current.dig('allow_force_pushes', 'enabled') || false,
-        allow_deletions: current.dig('allow_deletions', 'enabled') || false,
-        block_creations: current.dig('block_creations', 'enabled') || false,
-        required_conversation_resolution: current.dig('required_conversation_resolution', 'enabled') || false,
-        lock_branch: lock,
-        allow_fork_syncing: current.dig('allow_fork_syncing', 'enabled') || false
-      }
-
-      # Step 3: Apply the update
-      RestClient.put(url, body.to_json, headers)
-
-      # Step 4: Verify by re-fetching
-      verify_response = RestClient.get(url, headers)
-      updated = JSON.parse(verify_response.body)
-
-      lock_ok = updated.dig('lock_branch', 'enabled') == lock
-      restrictions_ok = lock ? !updated['restrictions'].nil? : updated['restrictions'].nil?
-
-      if lock_ok && restrictions_ok
-        puts "Lock branch: #{lock ? 'enabled' : 'disabled'} [OK]"
-        puts "Restrict who can push: #{lock ? 'enabled' : 'disabled'} [OK]"
-        puts "Both checks marked successfully."
+      if branch_lock_state?(rule, lock)
+        puts "'#{branch}' is already #{verb}ed. Nothing to change."
       else
-        puts "Lock branch: #{updated.dig('lock_branch', 'enabled') ? 'enabled' : 'disabled'} [#{lock_ok ? 'OK' : 'FAILED'}]"
-        puts "Restrict who can push: #{updated['restrictions'] ? 'enabled' : 'disabled'} [#{restrictions_ok ? 'OK' : 'FAILED'}]"
-        puts "One or more checks were not marked successfully."
+        rule = write_branch_lock(token, rule, lock)
+      end
+
+      report_branch_lock(rule, lock)
+    rescue GitHubTransientError, GitHubRequestError => e
+      puts "Failed to #{verb} branch: #{e.message}"
+      puts "You can #{verb} it by hand at https://github.com/#{repo}/settings/branches"
+      exit(1)
+    end
+
+    # Apply the lock state. A transient failure leaves the outcome UNKNOWN -- the "Server Error"
+    # that prompted this arrived after GitHub had already saved the lock -- so before every retry
+    # re-read the rule and stop as soon as it is in the wanted state. The mutation sets absolute
+    # values, so repeating it is harmless.
+    def write_branch_lock(token, rule, lock)
+      mutation = lock ? LOCK_BRANCH_MUTATION : UNLOCK_BRANCH_MUTATION
+      attempt = 0
+      loop do
+        attempt += 1
+        begin
+          updated = github_graphql(token, mutation, id: rule['id']).dig('updateBranchProtectionRule', 'branchProtectionRule')
+          raise GitHubRequestError, 'GitHub did not return the updated branch protection rule' if updated.nil?
+
+          return updated
+        rescue GitHubTransientError => e
+          puts "WARNING: GitHub did not confirm the change (attempt #{attempt}/#{BRANCH_PROTECTION_MAX_ATTEMPTS}): #{e.message}"
+          puts 'Checking whether it was applied anyway...'
+          current = with_github_retry('Re-reading the branch protection rule') { fetch_branch_protection_rule(token, rule['id']) }
+          if current && branch_lock_state?(current, lock)
+            puts 'It was: GitHub saved the change before returning the error.'
+            return current
+          end
+          raise e if attempt >= BRANCH_PROTECTION_MAX_ATTEMPTS
+
+          wait = github_retry_delay(attempt)
+          puts "Not applied yet. Retrying in #{wait}s..."
+          sleep(wait)
+        end
+      end
+    end
+
+    # [lock branch OK?, push restriction OK?] for the wanted state.
+    def branch_lock_checks(rule, lock)
+      restricted_to_nobody = rule['restrictsPushes'] == true && rule.dig('pushAllowances', 'totalCount').to_i.zero?
+      [rule['lockBranch'] == lock, lock ? restricted_to_nobody : rule['restrictsPushes'] == false]
+    end
+
+    def branch_lock_state?(rule, lock)
+      branch_lock_checks(rule, lock).all?
+    end
+
+    def report_branch_lock(rule, lock)
+      lock_ok, restrict_ok = branch_lock_checks(rule, lock)
+      allowed = rule.dig('pushAllowances', 'totalCount').to_i
+      restriction = if !rule['restrictsPushes'] then 'disabled'
+                    elsif allowed.zero? then 'enabled'
+                    else "enabled, but #{allowed} actor(s) may still push"
+                    end
+      puts "Lock branch: #{rule['lockBranch'] ? 'enabled' : 'disabled'} [#{lock_ok ? 'OK' : 'FAILED'}]"
+      puts "Restrict who can push: #{restriction} [#{restrict_ok ? 'OK' : 'FAILED'}]"
+      if lock_ok && restrict_ok
+        puts 'Both checks marked successfully.'
+      else
+        puts 'One or more checks were not marked successfully.'
         exit(1)
       end
+    end
+
+    def fetch_branch_protection_rules(token, owner, name)
+      rules = []
+      cursor = nil
+      loop do
+        data = github_graphql(token, BRANCH_PROTECTION_RULES_QUERY, owner: owner, name: name, cursor: cursor)
+        connection = data.dig('repository', 'branchProtectionRules')
+        raise GitHubRequestError, "#{owner}/#{name} is not visible to the configured token" if connection.nil?
+
+        rules.concat(connection['nodes'])
+        return rules unless connection.dig('pageInfo', 'hasNextPage')
+
+        cursor = connection.dig('pageInfo', 'endCursor')
+      end
+    end
+
+    def fetch_branch_protection_rule(token, id)
+      github_graphql(token, BRANCH_PROTECTION_RULE_QUERY, id: id)['node']
+    end
+
+    # Run a GitHub read, retrying transient failures with capped exponential backoff.
+    def with_github_retry(what)
+      attempt = 0
+      begin
+        attempt += 1
+        yield
+      rescue GitHubTransientError => e
+        raise if attempt >= BRANCH_PROTECTION_MAX_ATTEMPTS
+
+        wait = github_retry_delay(attempt)
+        puts "WARNING: #{what} failed (attempt #{attempt}/#{BRANCH_PROTECTION_MAX_ATTEMPTS}): #{e.message}. Retrying in #{wait}s..."
+        sleep(wait)
+        retry
+      end
+    end
+
+    def github_retry_delay(attempt)
+      [2**attempt, 30].min
+    end
+
+    # POST a GraphQL document to GitHub and return its `data`. Raises GitHubTransientError for
+    # failures worth retrying and GitHubRequestError for the rest.
+    def github_graphql(token, query, variables = {})
+      response = RestClient::Request.execute(
+        method: :post,
+        url: 'https://api.github.com/graphql',
+        payload: { query: query, variables: variables }.to_json,
+        headers: { 'Authorization' => "bearer #{token}", 'Content-Type' => 'application/json' },
+        open_timeout: 15,
+        read_timeout: 60
+      )
+      body = JSON.parse(response.body)
+      errors = Array(body['errors'])
+      return body['data'] || {} if errors.empty?
+
+      message = errors.map { |error| error['message'] }.join('; ')
+      # GraphQL reports its own 5xx inside a 200: "Something went wrong while executing your
+      # query. This may be the result of a timeout, or it could be a GitHub bug."
+      raise GitHubTransientError, message if message =~ /something went wrong|timeout|timed out/i
+
+      raise GitHubRequestError, message
+    rescue RestClient::Exceptions::Timeout, RestClient::ServerBrokeConnection, *RETRYABLE_ERRORS => e
+      # Timeout must be rescued before ExceptionWithResponse, which it subclasses.
+      raise GitHubTransientError, "#{e.class}: #{e.message}"
     rescue RestClient::ExceptionWithResponse => e
-      puts "Failed to #{lock ? 'lock' : 'unlock'} branch: #{e.response&.body}"
-      exit(1)
+      message = (JSON.parse(e.http_body.to_s)['message'] rescue nil) || e.http_body.to_s.strip[0, 200]
+      detail = "HTTP #{e.http_code} #{message}".strip
+      raise GitHubTransientError, detail if e.http_code.to_i >= 500
+
+      raise GitHubRequestError, detail
+    rescue JSON::ParserError
+      raise GitHubTransientError, "unreadable response from GitHub (HTTP #{response&.code})"
     end
 
     # By default with_retry never gives up on a transient failure -- it keeps retrying until
