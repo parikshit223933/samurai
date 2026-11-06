@@ -225,10 +225,10 @@ module Samurai
 
       puts "Pulling #{@target_branch_name}"
       run_git("checkout #{@target_branch_name}")
-      run_git('pull')
+      pull_from_origin(@target_branch_name)
       puts "Pulling #{@source_branch_name}"
       run_git("checkout #{@source_branch_name}")
-      run_git('pull')
+      pull_from_origin(@source_branch_name)
 
       current_date = DateTime.now.strftime('%d.%m.%y_%H_%M')
       release_branch_name = "#{@deployment_type}-#{current_date}"
@@ -257,7 +257,7 @@ module Samurai
 
       clear_index_lock
       run_git("checkout #{@target_branch_name}")
-      run_git("pull origin #{@target_branch_name}")
+      pull_from_origin(@target_branch_name)
       run_git("tag #{current_date} -m \"#{release_branch_name}\"")
 
       if @send_email
@@ -281,15 +281,15 @@ module Samurai
       def sync_branches_and_cleanup(release_branch_name, current_date)
       clear_index_lock
       run_git("checkout #{@target_branch_name}")
-      run_git('pull')
+      pull_from_origin(@target_branch_name)
 
       run_git("checkout #{@hotfix}")
-      run_git('pull')
-      run_git("pull origin #{@target_branch_name} --no-edit")
+      pull_from_origin(@hotfix)
+      pull_from_origin(@target_branch_name)
 
       run_git("checkout #{@staging}")
-      run_git('pull')
-      run_git("pull origin #{@target_branch_name} --no-edit")
+      pull_from_origin(@staging)
+      pull_from_origin(@target_branch_name)
 
       # Single atomic push of master, hotfix, staging, and the release tag.
       # Consolidates what used to be three separate pushes (master+tag, hotfix, staging)
@@ -319,16 +319,15 @@ module Samurai
     private
 
     # Transient git failures caused by a concurrent fetch racing ours, NOT a real error.
-    # The usual culprit is an editor's background autofetch (VS Code's Git extension runs
-    # `git fetch origin --recurse-submodules=no --progress --prune` every few minutes):
+    # The usual culprit is an editor's background autofetch (e.g. RubyMine's GitToolBox runs
+    # `git fetch origin --recurse-submodules=no --progress --prune` every 15 minutes):
     # right after the release PR is merged it updates refs/remotes/origin/<branch> at the
-    # same instant our `git pull origin <target>` does, so git loses the compare-and-swap
-    # and aborts with "cannot lock ref ... unable to update local ref". A plain `git pull`
-    # can likewise bail with "no such ref was fetched" when its fetch step is stepped on.
+    # same instant pull_from_origin's fetch does, so git loses the compare-and-swap and
+    # aborts with "cannot lock ref ... unable to update local ref".
     # The competing process has already finished by the time we see the error, so a short
     # retry succeeds. Without this, the deploy strands between the merge and the branch
     # sync (master tagged/pushed but hotfix+staging left behind), needing a manual finish.
-    TRANSIENT_GIT_ERROR = /cannot lock ref|unable to update local ref|no such ref was fetched/i
+    TRANSIENT_GIT_ERROR = /cannot lock ref|unable to update local ref/i
 
     # A stale or contended .git/index.lock. Either a prior git op crashed and left it behind,
     # or a concurrent process (typically an IDE's Git integration running status/add on the
@@ -404,6 +403,25 @@ module Samurai
 
       puts "WARNING: Stale .git/index.lock found. Removing it."
       FileUtils.rm_f(lock_file)
+    end
+
+    # `git pull origin <branch>`, minus the pull: fetch origin's <branch> into its
+    # remote-tracking ref, then merge that ref into the checked-out branch.
+    #
+    # `git pull` hands what it fetched to its merge step through .git/FETCH_HEAD, one scratch
+    # file that every fetch in the repo truncates and rewrites -- including an editor's
+    # background autofetch (see TRANSIENT_GIT_ERROR). When that fetch lands between pull's
+    # fetch and merge, pull finds FETCH_HEAD empty ("There are no candidates for merging among
+    # the refs that you just fetched"), half-written ("not something we can merge in
+    # .git/FETCH_HEAD"), or naming a different branch for merge -- which it then merges
+    # instead, "succeeding" while hotfix/staging never receive master. No retry makes that
+    # safe, so we never read FETCH_HEAD: a remote-tracking ref is replaced atomically, and a
+    # concurrent fetch can only advance it to a newer commit of the same branch (a ref-lock
+    # collision between the two fetches is retried by run_git). The full ref name keeps the
+    # merge from resolving to a stray local branch or tag that happens to be named origin/<branch>.
+    def pull_from_origin(branch)
+      run_git("fetch origin +refs/heads/#{branch}:refs/remotes/origin/#{branch}")
+      run_git("merge --no-edit refs/remotes/origin/#{branch}")
     end
 
     # lock/unlock go through GitHub's GraphQL updateBranchProtectionRule, NOT the REST
